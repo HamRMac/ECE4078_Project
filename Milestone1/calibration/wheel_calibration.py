@@ -88,7 +88,7 @@ def calibrateBaseline(scale):
     num = len(wheel_velocities_range)
     baseline = 0
     for delta_time, wheel_vel in zip(delta_times, wheel_velocities_range):
-        baseline += ((2 * scale * wheel_vel * delta_time)/(2 * pi))
+        baseline += ((2 * scale * wheel_vel * delta_time)/(2 * np.pi))
     baseline /= num
     print("The baseline parameter is estimated as {:.6f} m.".format(baseline))
 
@@ -99,8 +99,8 @@ if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--ip", metavar='', type=str, default='localhost')
-    parser.add_argument("--port", metavar='', type=int, default=40000)
+    parser.add_argument("--ip", metavar='', type=str, default='192.168.50.1')
+    parser.add_argument("--port", metavar='', type=int, default=8080)
     args, _ = parser.parse_known_args()
 
     ppi = PenguinPi(args.ip,args.port)
