@@ -89,8 +89,12 @@ class EKF:
 
         F = self.state_transition(raw_drive_meas)
         x = self.get_state_vector()
+        Q = self.predict_covariance(raw_drive_meas)
 
-        # TODO: add your codes here to complete the prediction step
+        pred_state = F @ x
+        self.P = F @ self.P @ F.T + Q
+
+        self.set_state_vector(pred_state)
 
     # the update step of EKF
     def update(self, measurements):
