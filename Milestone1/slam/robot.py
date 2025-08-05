@@ -65,18 +65,33 @@ class Robot:
     # --------------------------
 
     def derivative_drive(self, drive_meas):
+        # Compute the Jacobian of the drive measurement w.r.t. the robot state
+        # [∂f₁/∂x, ∂f₁/∂y, ∂f₁/∂θ]
+        # [∂f₂/∂x, ∂f₂/∂y, ∂f₂/∂θ]
+        # [∂f₃/∂x, ∂f₃/∂y, ∂f₃/∂θ]
+        # where f₁ = x-pos, f₂ = y-pos, f₃ = theta.
+        
+        # Note: Angular velocity is positive in the counter-clockwise direction.
         # Compute the differential of drive w.r.t. the robot state
         DFx = np.zeros((3,3))
-        DFx[0,0] = 1
-        DFx[1,1] = 1
-        DFx[2,2] = 1
+        DFx[0,0] = 1 # x position
+        DFx[1,1] = 1 # y position
+        DFx[2,2] = 1 # theta
 
         lin_vel, ang_vel = self.convert_wheel_speeds(drive_meas.left_speed, drive_meas.right_speed)
 
-        dt = drive_meas.dt
-        th = self.state[2]
+        dt = drive_meas.dt # Time step
+        th = self.state[2] # Theta
+        dtheta = dt * ang_vel # Change in theta
+
+        # TODO: Robot moving with 0 angular velocity
         
-        # TODO: add your codes here to compute DFx using lin_vel, ang_vel, dt, and th
+        # If angular velocity is not 0
+        turning_radius = lin_vel/ ang_vel if ang_vel != 0 else np.inf
+
+        # Fill in the non-zero off-diagonals:
+        DFx[0, 2] = turning_radius * (-np.cos(th) + np.cos(th + dtheta))  # d(x)/d(theta)
+        DFx[1, 2] =  turning_radius * (-np.sin(th) + np.sin(th + dtheta))  # d(y)/d(theta)
 
         return DFx
 
