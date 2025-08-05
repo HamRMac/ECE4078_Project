@@ -11,7 +11,7 @@ from machinevisiontoolbox import Image, CentralCamera
 if __name__ == '__main__':
     
     # Display image
-    img = Image.Read('./images/calib_0.png', grey=True)
+    img = Image.Read('calib_0.png', grey=True)
     image = Image(img)
     fig = matplotlib.pyplot.figure()
     plt.imshow(image.image, cmap='gray')
@@ -70,6 +70,8 @@ if __name__ == '__main__':
     print("\nIntrinsic parameters:\n", camera.K)
     fileNameI = "{}intrinsic.txt".format(dataDir)
     np.savetxt(fileNameI, camera.K, delimiter=',')
+
+    print(f"File saved to {fileNameI}")
     
     # extrinsic parameters
     # print("\nExtrinsic parameters:\n", repr(camera.pose))
