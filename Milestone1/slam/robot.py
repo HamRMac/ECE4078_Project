@@ -80,19 +80,19 @@ class Robot:
 
         lin_vel, ang_vel = self.convert_wheel_speeds(drive_meas.left_speed, drive_meas.right_speed)
 
-        dt = drive_meas.dt # Time step
-        th = self.state[2] # Theta
-        dtheta = dt * ang_vel # Change in theta
-
-        # TODO: Robot moving with 0 angular velocity
+        dt = drive_meas.dt
+        th = self.state[2]
         
-        # If angular velocity is not 0
-        turning_radius = lin_vel/ ang_vel if ang_vel != 0 else np.inf
-
-        # Fill in the non-zero off-diagonals:
-        DFx[0, 2] = turning_radius * (-np.cos(th) + np.cos(th + dtheta))  # d(x)/d(theta)
-        DFx[1, 2] =  turning_radius * (-np.sin(th) + np.sin(th + dtheta))  # d(y)/d(theta)
-
+        # TODO: add your codes here to compute DFx using lin_vel, ang_vel, dt, and th
+        if ang_vel ==0:
+            DFx[0,0] = np.cos(th)*lin_vel*dt
+            DFx[1,1] = np.sin(th)*lin_vel*dt
+            DFx[2,2] = 0 
+        else:
+            R = lin_vel/ang_vel
+            DFx[0,0] = R * (-np.sin(th)+np.sin(th+ang_vel*dt))
+            DFx[1,1] = R * (np.sin(th)-np.sin(th+ang_vel*dt))
+            DFx[2,2] = ang_vel*dt
         return DFx
 
     def derivative_measure(self, markers, idx_list):
