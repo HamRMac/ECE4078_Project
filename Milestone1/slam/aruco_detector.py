@@ -7,6 +7,10 @@ sys.path.insert(0, "{}/util".format(os.getcwd()))
 import util.measure as measure
 
 class aruco_detector:
+
+    # Tags of markers that are used
+    KNOWN_TAGS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+
     def __init__(self, robot, marker_length=0.07):
         self.camera_matrix = robot.camera_matrix
         self.distortion_params = robot.camera_dist
@@ -33,6 +37,8 @@ class aruco_detector:
             idi = ids[i,0]
             # Some markers appear multiple times but should only be handled once.
             if idi in seen_ids:
+                continue
+            elif idi not in self.KNOWN_TAGS:
                 continue
             else:
                 seen_ids.append(idi)
