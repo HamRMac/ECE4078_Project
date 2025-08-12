@@ -33,7 +33,7 @@ def calibrateWheelRadius():
             # Drive the robot at the given speed for the given time
             ppi.set_velocity([1, 0], tick=wheel_vel, time=delta_time)
 
-            uInput = float(input("How far did the robot travel"))
+            uInput = float(input("Input distance travelled: "))
             delta_times.append(delta_time)
             dxs.append(uInput)
             print("Recording that the robot drove {:.2f}m in {:.2f} seconds at wheel speed {}.\n".format(uInput,delta_time,
