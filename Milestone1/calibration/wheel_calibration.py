@@ -46,7 +46,7 @@ def calibrateWheelRadius():
     for delta_time, wheel_vel in zip(delta_times, wheel_velocities_range):
         scale += dx/(delta_time * wheel_vel) # TODO: replace with your code to compute the scale parameter using wheel_vel and delta_time
     scale /= num
-    print("The scale parameter is estimated as {:.6f} m/ticks.".format(scale))
+    print("The scale parameter is estimated as {:.6f} m/ticks.".format(scale)) # This can be converted to m by converting ticks to radians
 
     return scale
 
