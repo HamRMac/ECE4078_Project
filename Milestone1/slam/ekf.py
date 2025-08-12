@@ -119,6 +119,12 @@ class EKF:
         x = self.get_state_vector()
 
         # TODO: add your codes here to compute the updated x
+        K = self.P @ H.T @ np.linalg.inv(H @ self.P @ H.T + R)
+        updated_x = x + K @ (z - z_hat)
+        self.P = (np.eye((K@H.shape[0])) - K @ H) @ self.P
+        
+        self.set_state_vector(updated_x)
+        
 
 
     def state_transition(self, raw_drive_meas):
