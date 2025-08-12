@@ -131,6 +131,7 @@ class Operate:
         fileS = "{}scale.txt".format(datadir)
         scale = np.loadtxt(fileS, delimiter=',')
         if ip == 'localhost':
+            print("WARN: Dividing scale by 2 for LH")
             scale /= 2
         fileB = "{}baseline.txt".format(datadir)  
         baseline = np.loadtxt(fileB, delimiter=',')
