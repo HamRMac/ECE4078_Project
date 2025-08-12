@@ -225,55 +225,121 @@ class EKF:
         y_im = int(y*m2pixel+h/2.0)
         return (x_im, y_im)
 
-    def draw_slam_state(self, res = (320, 500), not_pause=True):
-        # Draw landmarks
+    def draw_slam_state(self, res=(320, 500), not_pause=True,
+                    draw_grid=True, grid_spacing_m=1.0,
+                    draw_subgrid=False, subgrid_spacing_m=0.25, subgrid_alpha=0.3):
+        # scale: meters -> pixels
         m2pixel = 100
-        if not_pause:
-            bg_rgb = np.array([213, 213, 213]).reshape(1, 1, 3)
-        else:
-            bg_rgb = np.array([120, 120, 120]).reshape(1, 1, 3)
-        canvas = np.ones((res[1], res[0], 3))*bg_rgb.astype(np.uint8)
-        # in meters, 
+
+        # background
+        bg_rgb = np.array([213, 213, 213] if not_pause else [120, 120, 120]).reshape(1, 1, 3)
+        canvas = np.ones((res[1], res[0], 3)) * bg_rgb.astype(np.uint8)
+
+        # --- GRID (under everything) ---
+        if draw_grid or draw_subgrid:
+            def draw_grid_lines(dst, origin_uv, spacing_m, color=(170,170,170), thickness=1):
+                spacing_px = max(1, int(round(spacing_m * m2pixel)))
+                w, h = res[0], res[1]
+                u0, v0 = int(origin_uv[0]), int(origin_uv[1])
+
+                # verticals to the right
+                u = u0
+                while u < w:
+                    cv2.line(dst, (u, 0), (u, h-1), color, thickness)
+                    u += spacing_px
+                # verticals to the left
+                u = u0 - spacing_px
+                while u >= 0:
+                    cv2.line(dst, (u, 0), (u, h-1), color, thickness)
+                    u -= spacing_px
+                # horizontals downward
+                v = v0
+                while v < h:
+                    cv2.line(dst, (0, v), (w-1, v), color, thickness)
+                    v += spacing_px
+                # horizontals upward
+                v = v0 - spacing_px
+                while v >= 0:
+                    cv2.line(dst, (0, v), (w-1, v), color, thickness)
+                    v -= spacing_px
+
+            origin_uv = self.to_im_coor((0, 0), res, m2pixel)
+
+            # main grid (solid grey)
+            if draw_grid:
+                draw_grid_lines(canvas, origin_uv, grid_spacing_m, color=(170,170,170), thickness=1)
+
+            # subgrid (overlay with lower opacity)
+            if draw_subgrid:
+                overlay = canvas.copy()
+                draw_grid_lines(overlay, origin_uv, subgrid_spacing_m, color=(170,170,170), thickness=1)
+                cv2.addWeighted(overlay, subgrid_alpha, canvas, 1.0 - subgrid_alpha, 0, dst=canvas)
+
+        # --- Pose/landmarks in robot-centric frame ---
         lms_xy = self.markers[:2, :]
         robot_xy = self.robot.state[:2, 0].reshape((2, 1))
         lms_xy = lms_xy - robot_xy
-        robot_xy = robot_xy*0
-        robot_theta = self.robot.state[2,0]
-        # plot robot
+        robot_xy = robot_xy * 0
+        robot_theta = self.robot.state[2, 0]
+
+        # robot covariance ellipse (in canvas space)
         start_point_uv = self.to_im_coor((0, 0), res, m2pixel)
-        
-        p_robot = self.P[0:2,0:2]
-        axes_len,angle = self.make_ellipse(p_robot)
-        canvas = cv2.ellipse(canvas, start_point_uv, 
-                    (int(axes_len[0]*m2pixel), int(axes_len[1]*m2pixel)),
-                    angle, 0, 360, (0, 30, 56), 1)
-        # draw landmards
+        p_robot = self.P[0:2, 0:2]
+        axes_len, angle = self.make_ellipse(p_robot)
+        canvas = cv2.ellipse(canvas, start_point_uv,
+                            (int(axes_len[0]*m2pixel), int(axes_len[1]*m2pixel)),
+                            angle, 0, 360, (0, 30, 56), 1)
+
+        # landmark ellipses
         if self.number_landmarks() > 0:
-            for i in range(len(self.markers[0,:])):
+            for i in range(self.markers.shape[1]):
                 xy = (lms_xy[0, i], lms_xy[1, i])
                 coor_ = self.to_im_coor(xy, res, m2pixel)
-                # plot covariance
-                Plmi = self.P[3+2*i:3+2*(i+1),3+2*i:3+2*(i+1)]
+                Plmi = self.P[3+2*i:3+2*(i+1), 3+2*i:3+2*(i+1)]
                 axes_len, angle = self.make_ellipse(Plmi)
-                canvas = cv2.ellipse(canvas, coor_, 
-                    (int(axes_len[0]*m2pixel), int(axes_len[1]*m2pixel)),
-                    angle, 0, 360, (244, 69, 96), 1)
+                canvas = cv2.ellipse(canvas, coor_,
+                                    (int(axes_len[0]*m2pixel), int(axes_len[1]*m2pixel)),
+                                    angle, 0, 360, (244, 69, 96), 1)
 
+        # convert to pygame surface (your original transforms)
         surface = pygame.surfarray.make_surface(np.rot90(canvas))
         surface = pygame.transform.flip(surface, True, False)
+
+        # robot sprite
         surface.blit(self.rot_center(self.pibot_pic, robot_theta*57.3),
                     (start_point_uv[0]-15, start_point_uv[1]-15))
+
+        # landmark sprites
         if self.number_landmarks() > 0:
-            for i in range(len(self.markers[0,:])):
+            for i in range(self.markers.shape[1]):
                 xy = (lms_xy[0, i], lms_xy[1, i])
                 coor_ = self.to_im_coor(xy, res, m2pixel)
                 try:
-                    surface.blit(self.lm_pics[self.taglist[i]-1],
-                    (coor_[0]-5, coor_[1]-5))
+                    surface.blit(self.lm_pics[self.taglist[i]-1], (coor_[0]-5, coor_[1]-5))
                 except IndexError:
-                    surface.blit(self.lm_pics[-1],
-                    (coor_[0]-5, coor_[1]-5))
+                    surface.blit(self.lm_pics[-1], (coor_[0]-5, coor_[1]-5))
+
+        # --- ORIGIN MARKERS ON TOP OF EVERYTHING ---
+        # Use world coords -> to_im_coor so arrows follow your orientation
+        arrow_len_m = 0.2  # 20 cm arrows
+        # black '+' at origin (±5 px arms computed in world so it's consistent)
+        plus_len_m = 0.05
+        p1 = self.to_im_coor((-plus_len_m, 0.0), res, m2pixel)
+        p2 = self.to_im_coor((+plus_len_m, 0.0), res, m2pixel)
+        p3 = self.to_im_coor((0.0, -plus_len_m), res, m2pixel)
+        p4 = self.to_im_coor((0.0, +plus_len_m), res, m2pixel)
+        pygame.draw.line(surface, (0, 0, 0), p1, p2, 2)
+        pygame.draw.line(surface, (0, 0, 0), p3, p4, 2)
+
+        # red +x arrow
+        x_tip = self.to_im_coor((arrow_len_m, 0.0), res, m2pixel)
+        pygame.draw.line(surface, (255, 0, 0), start_point_uv, x_tip, 3)
+        # green +y arrow
+        y_tip = self.to_im_coor((0.0, arrow_len_m), res, m2pixel)
+        pygame.draw.line(surface, (0, 200, 0), start_point_uv, y_tip, 3)
+
         return surface
+
 
     @staticmethod
     def rot_center(image, angle):
