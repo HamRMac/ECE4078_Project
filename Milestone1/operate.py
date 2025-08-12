@@ -230,7 +230,7 @@ class Operate:
             elif event.type == pygame.KEYDOWN and event.key == pygame.K_i:
                 self.command['save_image'] = True
             # save SLAM map
-            elif event.type == pygame.KEYDOWN and event.key == pygame.K_s:
+            elif event.type == pygame.KEYDOWN and event.key == pygame.K_m:
                 self.command['output'] = True
             # reset SLAM map
             elif event.type == pygame.KEYDOWN and event.key == pygame.K_r:
