@@ -3,6 +3,7 @@ from mapping_utils import MappingUtils
 import cv2
 import math
 import pygame
+from robot import Robot
 
 class EKF:
     # Implementation of an EKF for SLAM
@@ -13,7 +14,8 @@ class EKF:
     # Add outlier rejection here
     ##########################################
 
-    def __init__(self, robot):
+    def __init__(self, robot: Robot):
+        print("Initialising ekf.py V1.0")
         # State components
         self.robot = robot
         self.markers = np.zeros((2,0))
@@ -84,15 +86,26 @@ class EKF:
     # Tune your SLAM algorithm here
     # ########################################
 
-    # the prediction step of EKF
+    # The prediction step of EKF
     def predict(self, raw_drive_meas):
-
+        # Retrieve the required matricies
         F = self.state_transition(raw_drive_meas)
-        x = self.get_state_vector()
+        Q = self.predict_covariance(raw_drive_meas) # < To Check. Check units (should be per-timestep)
 
-        # TODO: add your codes here to complete the prediction step
+        # Advance robot state only (landmarks fixed)
+        self.robot.drive(raw_drive_meas) # This now becomes x_{k|k-1}
 
-    # the update step of EKF
+        # Store predicted state
+        x_pred = self.get_state_vector()
+        self.set_state_vector(x_pred)
+
+        # Propagate the covariance
+        self.P = F @ self.P @ F.T + Q # < The Q here is uncertainty
+        
+        # Enforce symmetry to correct for roundoff errors
+        self.P = 0.5*(self.P + self.P.T)
+
+    # The update step of EKF
     def update(self, measurements):
         if not measurements:
             return
@@ -103,9 +116,9 @@ class EKF:
 
         # Stack measurements and set covariance
         z = np.concatenate([lm.position.reshape(-1,1) for lm in measurements], axis=0)
-        R = np.zeros((2*len(measurements),2*len(measurements)))
-        for i in range(len(measurements)):
-            R[2*i:2*i+2,2*i:2*i+2] = measurements[i].covariance
+        Rm = np.zeros((2*len(measurements), 2*len(measurements)))
+        for i, lm in enumerate(measurements):
+            Rm[2*i:2*i+2, 2*i:2*i+2] = lm.covariance
 
         # Compute own measurements
         z_hat = self.robot.measure(self.markers, idx_list)
@@ -113,8 +126,17 @@ class EKF:
         H = self.robot.derivative_measure(self.markers, idx_list)
 
         x = self.get_state_vector()
+        
+        y = z - z_hat # Perform update
+        S = H @ self.P @ H.T + Rm # Update covariance
+        K = self.P @ H.T @ np.linalg.inv(S) # Calculate Kalman gain
 
-        # TODO: add your codes here to compute the updated x
+        x_new = x + K @ y
+        I = np.eye(self.P.shape[0])
+        self.P = (I - K @ H) @ self.P @ (I - K @ H).T + K @ Rm @ K.T
+        self.P = 0.5*(self.P + self.P.T) # Enforce symmetry
+
+        self.set_state_vector(x_new)
 
 
     def state_transition(self, raw_drive_meas):

@@ -198,18 +198,30 @@ class Operate:
     def update_keyboard(self):
         for event in pygame.event.get():
             ########### replace with your M1 codes ###########
-            # drive forward
-            if event.type == pygame.KEYDOWN and event.key == pygame.K_UP:
-                pass # TODO: replace with your M1 code to make the robot drive forward
-            # drive backward
-            elif event.type == pygame.KEYDOWN and event.key == pygame.K_DOWN:
-                pass # TODO: replace with your M1 code to make the robot drive backward
-            # turn left
-            elif event.type == pygame.KEYDOWN and event.key == pygame.K_LEFT:
-                pass # TODO: replace with your M1 code to make the robot turn left
-            # drive right
-            elif event.type == pygame.KEYDOWN and event.key == pygame.K_RIGHT:
-                pass # TODO: replace with your M1 code to make the robot turn right
+            # Note: self.command['motion'] = [forward speed, turning speed]
+            cmd = [0, 0]  # reset the command
+            # Add/subtract to the relevant element on key press/release
+            # if event is any of the direction keys
+            # up, down, left, right, w, a, s, d
+            if event.type in (pygame.KEYUP, pygame.KEYDOWN) and event.key in (pygame.K_UP, pygame.K_w, pygame.K_DOWN, pygame.K_s, pygame.K_LEFT, pygame.K_a, pygame.K_RIGHT, pygame.K_d):
+                if event.type == pygame.KEYDOWN:
+                    if event.key in (pygame.K_UP, pygame.K_w):
+                        self.command['motion'][0] += 1
+                    elif event.key in (pygame.K_DOWN, pygame.K_s):
+                        self.command['motion'][0] -= 1
+                    elif event.key in (pygame.K_LEFT, pygame.K_a):
+                        self.command['motion'][1] += 1
+                    elif event.key in (pygame.K_RIGHT, pygame.K_d):
+                        self.command['motion'][1] -= 1
+                elif event.type == pygame.KEYUP:
+                    if event.key in (pygame.K_UP, pygame.K_w):
+                        self.command['motion'][0] -= 1
+                    elif event.key in (pygame.K_DOWN, pygame.K_s):
+                        self.command['motion'][0] += 1
+                    elif event.key in (pygame.K_LEFT, pygame.K_a):
+                        self.command['motion'][1] -= 1
+                    elif event.key in (pygame.K_RIGHT, pygame.K_d):
+                        self.command['motion'][1] += 1
             ####################################################
             # stop
             elif event.type == pygame.KEYDOWN and event.key == pygame.K_SPACE:
@@ -218,7 +230,7 @@ class Operate:
             elif event.type == pygame.KEYDOWN and event.key == pygame.K_i:
                 self.command['save_image'] = True
             # save SLAM map
-            elif event.type == pygame.KEYDOWN and event.key == pygame.K_s:
+            elif event.type == pygame.KEYDOWN and event.key == pygame.K_m:
                 self.command['output'] = True
             # reset SLAM map
             elif event.type == pygame.KEYDOWN and event.key == pygame.K_r:
@@ -291,7 +303,7 @@ if __name__ == "__main__":
     counter = 40
     while not start:
         for event in pygame.event.get():
-            if event.type == pygame.KEYDOWN:
+            if event.type == pygame.KEYDOWN and (event.key not in(pygame.K_UP, pygame.K_w, pygame.K_DOWN, pygame.K_s, pygame.K_LEFT, pygame.K_a, pygame.K_RIGHT, pygame.K_d)): # Squashes a bug (immediately detects a keyup without a keydown, pibot constantly travels with no keys pressed)
                 start = True
         canvas.blit(splash, (0, 0))
         x_ = min(counter, 600)
