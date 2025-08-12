@@ -2,6 +2,7 @@ import numpy as np
 
 class Robot:
     def __init__(self, wheels_width, wheels_scale, camera_matrix, camera_dist):
+        print("Initialising robot.py V1.0")
         # State is a vector of [x,y,theta]'
         self.state = np.zeros((3,1))
         
