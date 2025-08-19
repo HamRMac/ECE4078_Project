@@ -281,6 +281,8 @@ if __name__ == "__main__":
     parser.add_argument("--save_data", action='store_true')
     parser.add_argument("--play_data", action='store_true')
     args, _ = parser.parse_known_args()
+
+    print("Operate.py V1.1")
     
     pygame.font.init() 
     TITLE_FONT = pygame.font.Font('pics/8-BitMadness.ttf', 35)
@@ -325,7 +327,7 @@ if __name__ == "__main__":
         # visualise
         operate.draw(canvas)
         pygame.display.update()
-
-
-
-
+        # Print the robot pose (one line)
+        # Timestamped with fixed spacing
+        x, y, th = operate.ekf.robot.state
+        print(f"Robot Pose ({pygame.time.get_ticks()} ms): x: {x[0]}, y: {y[0]}, t: {np.rad2deg(th[0])}")
