@@ -2,6 +2,7 @@ import numpy as np
 
 class Robot:
     def __init__(self, wheels_width, wheels_scale, camera_matrix, camera_dist):
+        print("Initialising robot.py V1.0")
         # State is a vector of [x,y,theta]'
         self.state = np.zeros((3,1))
         
@@ -65,34 +66,31 @@ class Robot:
     # --------------------------
 
     def derivative_drive(self, drive_meas):
-        # Compute the Jacobian of the drive measurement w.r.t. the robot state
-        # [∂f₁/∂x, ∂f₁/∂y, ∂f₁/∂θ]
-        # [∂f₂/∂x, ∂f₂/∂y, ∂f₂/∂θ]
-        # [∂f₃/∂x, ∂f₃/∂y, ∂f₃/∂θ]
-        # where f₁ = x-pos, f₂ = y-pos, f₃ = theta.
-        
-        # Note: Angular velocity is positive in the counter-clockwise direction.
-        # Compute the differential of drive w.r.t. the robot state
-        DFx = np.zeros((3,3))
-        DFx[0,0] = 1 # x position
-        DFx[1,1] = 1 # y position
-        DFx[2,2] = 1 # theta
+        """
+        Jacobian of the differential-drive motion model wrt robot state x=[x,y,theta]^T.
+        Returns DFx = ∂f/∂x (3x3) for the one-step update used in drive().
+        """
+        # Define identity matrix
+        DFx = np.eye(3)
 
-        lin_vel, ang_vel = self.convert_wheel_speeds(drive_meas.left_speed, drive_meas.right_speed)
-
+        # Get the required information (states, dt)
+        v, w = self.convert_wheel_speeds(drive_meas.left_speed, drive_meas.right_speed)
         dt = drive_meas.dt
-        th = self.state[2]
-        
-        # TODO: add your codes here to compute DFx using lin_vel, ang_vel, dt, and th
-        if ang_vel ==0:
-            DFx[0,0] = np.cos(th)*lin_vel*dt
-            DFx[1,1] = np.sin(th)*lin_vel*dt
-            DFx[2,2] = 0 
+        th = float(self.state[2])
+
+        # Compute the relevant jacobian depending on if we are turning or not
+        if w < 1e-9:
+            # Simple non turning model
+            # x' = x + v cosθ dt ; y' = y + v sinθ dt ; θ' = θ
+            DFx[0,2] = -v * np.sin(th) * dt
+            DFx[1,2] =  v * np.cos(th) * dt
         else:
-            R = lin_vel/ang_vel
-            DFx[0,0] = R * (-np.sin(th)+np.sin(th+ang_vel*dt))
-            DFx[1,1] = R * (np.cos(th)-np.cos(th+ang_vel*dt))
-            DFx[2,2] = ang_vel*dt
+            # Turning model with turning radius
+            th2 = th + w*dt
+            # arc Jacobian wrt θ (v, w are treated as inputs here)
+            DFx[0,2] = (v/w) * (np.cos(th2) - np.cos(th))
+            DFx[1,2] = (v/w) * (np.sin(th2) - np.sin(th))
+
         return DFx
 
     def derivative_measure(self, markers, idx_list):
@@ -127,36 +125,52 @@ class Robot:
         return DH
     
     def covariance_drive(self, drive_meas):
-        # Derivative of lin_vel, ang_vel w.r.t. left_speed, right_speed
-        Jac1 = np.array([[self.wheels_scale/2, self.wheels_scale/2],
-                [-self.wheels_scale/self.wheels_width, self.wheels_scale/self.wheels_width]])
+        """
+        Compute the process noise covariance Q for the current timestep
+        by mapping wheel rotation rate noise into (x, y, theta) uncertainty
+        using the motion model Jacobians.
+        """
+        J_wheelVel2bodyVel = np.array([
+            [self.wheels_scale/2, self.wheels_scale/2],
+            [-self.wheels_scale/self.wheels_width, self.wheels_scale/self.wheels_width]
+        ])
         
-        lin_vel, ang_vel = self.convert_wheel_speeds(drive_meas.left_speed, drive_meas.right_speed)
-        th = self.state[2]
+        v, w = self.convert_wheel_speeds(drive_meas.left_speed, drive_meas.right_speed)
         dt = drive_meas.dt
-        th2 = th + dt*ang_vel
+        th = float(self.state[2])
+        th2 = th + w*dt             # Next theta
 
         # Derivative of x,y,theta w.r.t. lin_vel, ang_vel
-        Jac2 = np.zeros((3,2))
+        J_bodyVel2Pose = np.zeros((3,2))
         
-        # TODO: add your codes here to compute Jac2 using lin_vel, ang_vel, dt, th, and th2
-        if ang_vel==0:
-            Jac2[0,0] = np.cos(th)*dt
-            Jac2[1,0] = np.sin(th)*dt
-            Jac2[2,0] = 0
+        if abs(w) < 1e-9:
+            # straight-line limits (use Taylor series)
+            J_bodyVel2Pose[0,0] = np.cos(th) * dt                     # ∂x/∂v
+            J_bodyVel2Pose[1,0] = np.sin(th) * dt                     # ∂y/∂v
+            J_bodyVel2Pose[2,0] = 0.0                                 # ∂θ/∂v
+            J_bodyVel2Pose[0,1] = -0.5 * v * np.sin(th) * dt**2       # ∂x/∂ω
+            J_bodyVel2Pose[1,1] =  0.5 * v * np.cos(th) * dt**2       # ∂y/∂ω
+            J_bodyVel2Pose[2,1] = dt                                  # ∂θ/∂ω
         else:
-            R = lin_vel/ang_vel
-            Jac2[0,0] =  (-np.sin(th)+np.sin(th2))/ang_vel
-            Jac2[1,0] = (np.cos(th)-np.cos(th2))/ang_vel
-            Jac2[2,0] = 0 
-            Jac2[0,0] = -R * ( (np.sin(th)+np.sin(th2))/ang_vel  - np.cos(th2)*dt)
-            Jac2[0,1] = -R * ((np.cos(th)-np.cos(th2))/ang_vel + np.sin(th2)*dt)
-            Jac2[0,2] = dt
-        # Derivative of x,y,theta w.r.t. left_speed, right_speed
-        Jac = Jac2 @ Jac1
+            # turning (arc)
+            J_bodyVel2Pose[0,0] = (np.sin(th2) - np.sin(th)) / w
+            J_bodyVel2Pose[1,0] = -(np.cos(th2) - np.cos(th)) / w
+            J_bodyVel2Pose[2,0] = 0.0
 
-        # Compute covariance
-        cov = np.diag((drive_meas.left_cov, drive_meas.right_cov))
-        cov = Jac @ cov @ Jac.T
-        
+            # ∂x/∂ω and ∂y/∂ω (closed form)
+            J_bodyVel2Pose[0,1] = v * (w*dt*np.cos(th2) - (np.sin(th2) - np.sin(th))) / (w**2)
+            J_bodyVel2Pose[1,1] = v * (w*dt*np.sin(th2) + (np.cos(th2) - np.cos(th))) / (w**2)
+            J_bodyVel2Pose[2,1] = dt
+
+        # Jacobian that converts wheel velocities to robot pose
+        Jac = J_bodyVel2Pose @ J_wheelVel2bodyVel
+
+        # Map the wheel covariance to the pose covariance
+        cov_wheels = np.diag((drive_meas.left_cov, drive_meas.right_cov))
+        cov = Jac @ cov_wheels @ Jac.T
+
+        # If we find it is a bit jittery we can uncomment this line: Make covariance matrix symmetric
+        # cov = 0.5 * (cov + cov.T)
+
+        # Return the pose covariance
         return cov
