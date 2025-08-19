@@ -70,6 +70,10 @@ class Operate:
         self.aruco_img = np.zeros([240,320,3], dtype=np.uint8)
         self.bg = pygame.image.load('pics/gui_mask.jpg')
 
+        # Robot params
+        self.left_wheel_cov = 1
+        self.right_wheel_cov = 1
+
     # wheel control
     def control(self):    
         if args.play_data:
@@ -85,7 +89,7 @@ class Operate:
             drive_meas = measure.Drive(lv, rv, dt)
         # running on physical robot (right wheel reversed)
         else:
-            drive_meas = measure.Drive(lv, -rv, dt)
+            drive_meas = measure.Drive(lv, -rv, dt, left_cov=self.left_wheel_cov, right_cov=self.right_wheel_cov)
         self.control_clock = time.time()
         return drive_meas
         

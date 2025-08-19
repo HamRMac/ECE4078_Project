@@ -23,7 +23,7 @@ class EKF:
 
         # Covariance matrix & landmark init
         self.P = np.zeros((3,3))
-        self.init_lm_cov = 1e3
+        self.init_lm_cov = 1e3  # Initial landmark covariance
         self.robot_init_state = None
         # Track whether we've locked the first landmark (reference) while stationary
         self.first_marker_locked = False
@@ -32,6 +32,9 @@ class EKF:
         # Movement threshold (meters & radians) below which we consider the robot stationary
         self._stationary_lin_thresh = 1e-4  # 0.1 mm
         self._stationary_ang_thresh = 1e-4  # ~0.006 degrees
+        # Static covariance for the robot's motion model
+        # Added each time predict is called
+        self.static_covariance = 5e-3
 
         # Graphics assets
         self.lm_pics = []
@@ -158,7 +161,7 @@ class EKF:
     def predict_covariance(self, raw_drive_meas):
         n = self.number_landmarks()*2 + 3
         Q = np.zeros((n,n))
-        Q[0:3,0:3] = self.robot.covariance_drive(raw_drive_meas)# + 0.01*np.eye(3)
+        Q[0:3,0:3] = self.robot.covariance_drive(raw_drive_meas) + self.static_covariance*np.eye(3)
         return Q
     
     # Helper: determine if robot has moved since initialisation
