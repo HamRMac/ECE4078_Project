@@ -25,6 +25,7 @@ import slam.aruco_detector as aruco
 class Operate:
     def __init__(self, args):
         self.folder = 'pibot_dataset/'
+        self.map_id = 0
         if not os.path.exists(self.folder):
             os.makedirs(self.folder)
         else:
@@ -141,8 +142,9 @@ class Operate:
     # save SLAM map
     def record_data(self):
         if self.command['output']:
-            self.output.write_map(self.ekf)
-            self.notification = 'Map is saved'
+            self.output.write_map(slam=self.ekf, map_id=self.map_id)
+            self.map_id += 1
+            self.notification = f'Map {self.map_id} is saved'
             self.command['output'] = False
 
     # paint the GUI            
