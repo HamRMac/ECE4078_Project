@@ -267,7 +267,13 @@ class EKF:
 
     def draw_slam_state(self, res=(320, 500), not_pause=True,
                     draw_grid=True, grid_spacing_m=1.0,
-                    draw_subgrid=False, subgrid_spacing_m=0.25, subgrid_alpha=0.3):
+                    draw_subgrid=False, subgrid_spacing_m=0.25, subgrid_alpha=0.3,
+                    grid_at_origin: bool = False):
+        """
+        Draw the SLAM state visualization.
+        If grid_at_origin is True, the grid is centered at the world origin (0,0).
+        Otherwise, the grid is placed as in the original logic (robot-centric).
+        """
         # scale: meters -> pixels
         m2pixel = 100
 
@@ -303,7 +309,14 @@ class EKF:
                     cv2.line(dst, (0, v), (w-1, v), color, thickness)
                     v -= spacing_px
 
-            origin_uv = self.to_im_coor((0, 0), res, m2pixel)
+            # Determine grid origin in image coordinates
+            if grid_at_origin:
+                # Always center grid at world origin (0,0)
+                origin_uv = self.to_im_coor((0, 0), res, m2pixel)
+            else:
+                # Default: center grid at robot's current position
+                robot_xy = self.robot.state[:2, 0] if self.robot.state.shape == (3, 1) else self.robot.state[:2]
+                origin_uv = self.to_im_coor((-robot_xy[0], -robot_xy[1]), res, m2pixel)
 
             # main grid (solid grey)
             if draw_grid:
