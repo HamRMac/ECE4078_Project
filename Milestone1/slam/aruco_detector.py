@@ -47,6 +47,15 @@ class aruco_detector:
             lm_bff2d = np.block([[lm_tvecs[2,:]],[-lm_tvecs[0,:]]])
             lm_bff2d = np.mean(lm_bff2d, axis=1).reshape(-1,1)
 
+            face_rot = rvecs[1,:]
+            cvec = np.array([[np.cos(face_rot), -np.sin(face_rot)],[np.sin(face_rot), np.cos(face_rot)]]) @ lm_bff2d
+
+            cuvec = cvec / np.linalg.norm(cvec)
+
+            avec = self.marker_length / 2 * cuvec
+
+            lm_bff2d = lm_bff2d + avec
+
             lm_measurement = measure.Marker(lm_bff2d, idi)
             measurements.append(lm_measurement)
         
