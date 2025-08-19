@@ -3,6 +3,8 @@ import ast
 import numpy as np
 import json
 
+import matplotlib.pyplot as plt
+
 def parse_groundtruth(fname : str) -> dict:
     with open(fname,'r') as f:
         # gt_dict = ast.literal_eval(f.readline())
@@ -133,10 +135,63 @@ if __name__ == '__main__':
     print("Pred Locations")
     print(taglist)
     print("Real Locations")
-    print("np.array("+np.array2string(gt_vec, precision=4, separator=',')+')')
+    print("np.array("+np.array2string(gt_vec, precision=4, separator=',')+")")
     print("Aligned Pred Locations")
-    print("np.array("+np.array2string(us_vec_aligned, precision=4, separator=',')+')')
+    print("np.array("+np.array2string(us_vec_aligned, precision=4, separator=',')+")")
     print("Marker errors (Highest error assumed for unseen markers)")
-    print("np.array("+np.array2string(residuals, precision=4, separator=',')+')')
+    print("np.array("+np.array2string(residuals, precision=4, separator=',')+")")
+
+    # --- Plotting ---
+    fig, ax = plt.subplots(figsize=(8,8))
+
+    # Plot true marker locations
+    ax.scatter(gt_vec[0], gt_vec[1], c='g', marker='o', label='True Markers')
+    # Plot unaligned predicted marker locations
+    ax.scatter(us_vec[0], us_vec[1], c='r', marker='x', label='Unaligned Markers')
+    # Plot aligned predicted marker locations
+    ax.scatter(us_vec_aligned[0], us_vec_aligned[1], c='b', marker='^', label='Aligned Markers')
+
+
+    # Number the markers (using taglist)
+    for i, tag in enumerate(taglist):
+        # True marker
+        ax.text(gt_vec[0, i], gt_vec[1, i], f'{tag}', color='g', fontsize=10, ha='right', va='bottom', fontweight='bold')
+        # Unaligned marker
+        ax.text(us_vec[0, i], us_vec[1, i], f'{tag}', color='r', fontsize=10, ha='left', va='top')
+        # Aligned marker
+        ax.text(us_vec_aligned[0, i], us_vec_aligned[1, i], f'{tag}', color='b', fontsize=10, ha='center', va='center')
+        # Draw red dashed line from unaligned to aligned
+        ax.plot([us_vec[0, i], us_vec_aligned[0, i]], [us_vec[1, i], us_vec_aligned[1, i]], 'r--', linewidth=1, alpha=0.7)
+
+    # Draw arena (2.4x2.4m square centered on origin)
+    arena_size = 2.4
+    arena_x = [-arena_size/2, arena_size/2, arena_size/2, -arena_size/2, -arena_size/2]
+    arena_y = [-arena_size/2, -arena_size/2, arena_size/2, arena_size/2, -arena_size/2]
+    ax.plot(arena_x, arena_y, 'k-', linewidth=2, label='Arena (2.4m)')
+
+    # Set grid and subgrid
+    major_ticks = np.arange(-5, 5.1, 1.0)
+    minor_ticks = np.arange(-5, 5.1, 0.2)
+    ax.set_xticks(major_ticks)
+    ax.set_xticks(minor_ticks, minor=True)
+    ax.set_yticks(major_ticks)
+    ax.set_yticks(minor_ticks, minor=True)
+    ax.grid(which='both', color='gray', linestyle='--', linewidth=0.5, alpha=0.5)
+    ax.grid(which='major', color='black', linestyle='-', linewidth=1, alpha=0.7)
+
+    # Center plot about the origin
+    all_x = np.concatenate([gt_vec[0], us_vec[0], us_vec_aligned[0], [0]])
+    all_y = np.concatenate([gt_vec[1], us_vec[1], us_vec_aligned[1], [0]])
+    max_range = max(np.max(np.abs(all_x)), np.max(np.abs(all_y)), 1.0)
+    ax.set_xlim(-max_range, max_range)
+    ax.set_ylim(-max_range, max_range)
+
+    ax.set_aspect('equal', adjustable='box')
+    ax.set_xlabel('X (meters)')
+    ax.set_ylabel('Y (meters)')
+    ax.set_title('SLAM Marker Ground-Truth Analysis')
+    ax.legend(loc='center left', bbox_to_anchor=(1.02, 0.5), borderaxespad=0)
+    plt.tight_layout(rect=[0, 0, 0.85, 1])
+    plt.show()
 
 
