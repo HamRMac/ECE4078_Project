@@ -20,6 +20,7 @@ sys.path.insert(0, "{}/slam".format(os.getcwd()))
 from slam.ekf import EKF
 from slam.robot import Robot
 import slam.aruco_detector as aruco
+from ECE4078_Project.Milestone1.slam.joint_optimiser import JointOptimiser2D
 
 
 class Operate:
@@ -52,7 +53,8 @@ class Operate:
                         'inference': False,
                         'output': False,
                         'save_inference': False,
-                        'save_image': False}
+                        'save_image': False,
+                        'optimise_now': False}
         self.quit = False
         self.pred_fname = ''
         self.request_recover_robot = False
@@ -69,10 +71,13 @@ class Operate:
         self.img = np.zeros([240,320,3], dtype=np.uint8)
         self.aruco_img = np.zeros([240,320,3], dtype=np.uint8)
         self.bg = pygame.image.load('pics/gui_mask.jpg')
-
         # Robot params
         self.left_wheel_cov = 1
         self.right_wheel_cov = 1
+        # Joint (bundle) optimizer support
+        self.joint_optimiser = JointOptimiser2D()
+        self._joint_opt_frame_counter = 0
+        self._joint_opt_interval = 50  # run automatically every N collected frames (>=2 markers)
 
     # wheel control
     def control(self):    
@@ -115,6 +120,54 @@ class Operate:
             self.ekf.predict(drive_meas)
             self.ekf.add_landmarks(lms)
             self.ekf.update(lms)
+            # Collect frame for joint optimization (only when SLAM running)
+            self._collect_joint_opt_frame(lms)
+
+            # Periodic automatic optimization
+            if (self._joint_opt_frame_counter > 0 and 
+                self._joint_opt_frame_counter % self._joint_opt_interval == 0):
+                self._run_joint_optimisation(auto=True)
+
+            # Manual trigger
+            if self.command['optimise_now']:
+                self._run_joint_optimisation(auto=False)
+                self.command['optimise_now'] = False
+
+    def _collect_joint_opt_frame(self, lms):
+        """Accumulate a frame (robot pose + >=2 marker observations) for joint optimisation."""
+        if not lms or len(lms) < 2:
+            return
+        pose = self.ekf.robot.state.flatten()  # [x, y, theta]
+        obs = []
+        for lm in lms:
+            try:
+                vec = lm.position.flatten()  # body-frame 2D vector
+            except Exception:
+                continue
+            obs.append((int(lm.tag), vec))
+        if len(obs) < 2:
+            return
+        self.joint_optimiser.add_frame(pose, obs)
+        self._joint_opt_frame_counter += 1
+
+    def _run_joint_optimisation(self, auto=False):
+        cam_poses, marker_map = self.joint_optimiser.optimise()
+        if not marker_map:
+            if not auto:
+                print('[JointOpt] Not enough data to optimize (need frames with >=2 markers).')
+            return
+        # Update EKF landmark estimates with optimized values (keep covariance as-is)
+        updated = 0
+        for idx, tag in enumerate(self.ekf.taglist):
+            if tag in marker_map:
+                self.ekf.markers[:, idx] = marker_map[tag].reshape(2)
+                updated += 1
+        if auto:
+            print(f'[JointOpt][Auto] Optimised map with {len(marker_map)} markers; updated {updated}.')
+        else:
+            print(f'[JointOpt][Manual] Optimised map with {len(marker_map)} markers; updated {updated}.')
+        # (Optional) could reset optimiser to start a new batch
+        # self.joint_optimiser = JointOptimiser2D()
 
     # save images taken by the camera
     def save_image(self):
@@ -239,6 +292,9 @@ class Operate:
             # save SLAM map
             elif event.type == pygame.KEYDOWN and event.key == pygame.K_m:
                 self.command['output'] = True
+            # manual joint optimisation trigger (press 'o')
+            elif event.type == pygame.KEYDOWN and event.key == pygame.K_o:
+                self.command['optimise_now'] = True
             # reset SLAM map
             elif event.type == pygame.KEYDOWN and event.key == pygame.K_r:
                 if self.double_reset_comfirm == 0:
