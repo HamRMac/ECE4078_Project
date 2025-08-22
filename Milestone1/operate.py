@@ -41,8 +41,9 @@ class Operate:
 
         # initialise SLAM parameters
         self.ekf = self.init_ekf(args.calib_dir, args.ip)
+        
         self.aruco_det = aruco.aruco_detector(
-            self.ekf.robot, marker_length = 0.07) # size of the ARUCO markers
+            self.ekf.robot, marker_length = 0.07, cube_depth=0.08) # size of the ARUCO markers 
 
         if args.save_data:
             self.data = dh.DatasetWriter('record')
@@ -468,4 +469,18 @@ if __name__ == "__main__":
         # Print the robot pose (one line)
         # Timestamped with fixed spacing
         x, y, th = operate.ekf.robot.state
+        '''
         #print(f"Robot Pose ({pygame.time.get_ticks()} ms): x: {x[0]}, y: {y[0]}, t: {np.rad2deg(th[0])}")
+        if hasattr(operate.ekf, 'taglist') and hasattr(operate.ekf, 'markers'):
+            # Pair each tag with its column index, then sort by tag (ascending)
+            tag_index_pairs = list(enumerate(operate.ekf.taglist))
+            # taglist elements are expected ints; if not, attempt int conversion for sorting
+            try:
+                tag_index_pairs.sort(key=lambda p: int(p[1]))
+            except Exception:
+                tag_index_pairs.sort(key=lambda p: p[1])
+            for idx, tag in tag_index_pairs:
+                if idx < operate.ekf.markers.shape[1]:
+                    mx, my = operate.ekf.markers[:, idx]
+                    print(f"Tag {tag} ({pygame.time.get_ticks()} ms): x: {mx}, y: {my}")
+         '''
