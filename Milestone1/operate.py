@@ -413,7 +413,7 @@ if __name__ == "__main__":
     parser.add_argument("--play_data", action='store_true')
     args, _ = parser.parse_known_args()
 
-    print("Operate.py V1.2")
+    print("Operate.py V2.0 (Optimiser Version)")
     
     pygame.font.init() 
     TITLE_FONT = pygame.font.Font('pics/8-BitMadness.ttf', 35)

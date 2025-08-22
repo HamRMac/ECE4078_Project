@@ -15,7 +15,7 @@ class EKF:
     ##########################################
 
     def __init__(self, robot: Robot):
-        print("Initialising ekf.py V1.0")
+        print("Initialising ekf.py V2.0")
         # State components
         self.robot = robot
         self.markers = np.zeros((2,0))
