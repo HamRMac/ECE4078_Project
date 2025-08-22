@@ -21,10 +21,22 @@ class EKF:
         self.markers = np.zeros((2,0))
         self.taglist = []
 
-        # Covariance matrix
+        # Covariance matrix & landmark init
         self.P = np.zeros((3,3))
-        self.init_lm_cov = 1e3
+        self.init_lm_cov = 1e3  # Initial landmark covariance
         self.robot_init_state = None
+        # Track whether we've locked the first landmark (reference) while stationary
+        self.first_marker_locked = False
+        # Store initial robot pose (will be zeros initially)
+        self.robot_init_state = self.robot.state.copy()
+        # Movement threshold (meters & radians) below which we consider the robot stationary
+        self._stationary_lin_thresh = 1e-4  # 0.1 mm
+        self._stationary_ang_thresh = 1e-4  # ~0.006 degrees
+        # Static covariance for the robot's motion model
+        # Added each time predict is called
+        self.static_covariance = 5e-3
+
+        # Graphics assets
         self.lm_pics = []
         for i in range(1, 11):
             f_ = f'./pics/8bit/lm_{i}.png'
@@ -40,7 +52,8 @@ class EKF:
         # Covariance matrix
         self.P = np.zeros((3,3))
         self.init_lm_cov = 1e3
-        self.robot_init_state = None
+        self.robot_init_state = self.robot.state.copy()
+        self.first_marker_locked = False
 
     def number_landmarks(self):
         return int(self.markers.shape[1])
@@ -148,8 +161,16 @@ class EKF:
     def predict_covariance(self, raw_drive_meas):
         n = self.number_landmarks()*2 + 3
         Q = np.zeros((n,n))
-        Q[0:3,0:3] = self.robot.covariance_drive(raw_drive_meas)+ 0.01*np.eye(3)
+        Q[0:3,0:3] = self.robot.covariance_drive(raw_drive_meas) + self.static_covariance*np.eye(3)
         return Q
+    
+    # Helper: determine if robot has moved since initialisation
+    def _robot_is_stationary(self):
+        if self.robot_init_state is None:
+            return True
+        dpos = np.linalg.norm(self.robot.state[0:2] - self.robot_init_state[0:2])
+        dth = abs(float(self.robot.state[2] - self.robot_init_state[2]))
+        return (dpos < self._stationary_lin_thresh) and (dth < self._stationary_ang_thresh)
 
     def add_landmarks(self, measurements):
         if not measurements:
@@ -158,6 +179,7 @@ class EKF:
         th = self.robot.state[2]
         robot_xy = self.robot.state[0:2,:]
         R_theta = np.block([[np.cos(th), -np.sin(th)],[np.sin(th), np.cos(th)]])
+
 
         # Add new landmarks to the state
         for lm in measurements:
@@ -172,11 +194,29 @@ class EKF:
             self.taglist.append(int(lm.tag))
             self.markers = np.concatenate((self.markers, lm_inertial), axis=1)
 
-            # Create a simple, large covariance to be fixed by the update step
+            # Expand covariance matrix for new landmark
             self.P = np.concatenate((self.P, np.zeros((2, self.P.shape[1]))), axis=0)
             self.P = np.concatenate((self.P, np.zeros((self.P.shape[0], 2))), axis=1)
-            self.P[-2,-2] = self.init_lm_cov**2
-            self.P[-1,-1] = self.init_lm_cov**2
+
+            # Default: large initial uncertainty (squared because init_lm_cov is std-like)
+            new_cov_val = self.init_lm_cov**2
+
+            # If this is the FIRST landmark added while robot is stationary, lock it with tiny covariance
+            if (len(self.taglist) == 1  # we just appended this landmark
+                and not self.first_marker_locked
+                and self._robot_is_stationary()):
+                new_cov_val = 1e-12  # extremely high certainty ~ effectively fixed reference
+                self.first_marker_locked = True
+                # Print lock info: id and estimated position (rounded to 2 decimals)
+                pos = lm_inertial.flatten()
+                pos_str = f"({pos[0]:.2f}, {pos[1]:.2f})"
+                print(f"[EKF] Locked marker {lm.tag} at {pos_str} as reference (high certainty)")
+
+            self.P[-2,-2] = new_cov_val
+            self.P[-1,-1] = new_cov_val
+
+            # (Optional) enforce symmetry
+            self.P = 0.5*(self.P + self.P.T)
 
     ##########################################
     ##########################################
@@ -228,7 +268,13 @@ class EKF:
 
     def draw_slam_state(self, res=(320, 500), not_pause=True,
                     draw_grid=True, grid_spacing_m=1.0,
-                    draw_subgrid=False, subgrid_spacing_m=0.25, subgrid_alpha=0.3):
+                    draw_subgrid=False, subgrid_spacing_m=0.25, subgrid_alpha=0.3,
+                    grid_at_origin: bool = False):
+        """
+        Draw the SLAM state visualization.
+        If grid_at_origin is True, the grid is centered at the world origin (0,0).
+        Otherwise, the grid is placed as in the original logic (robot-centric).
+        """
         # scale: meters -> pixels
         m2pixel = 100
 
@@ -264,7 +310,14 @@ class EKF:
                     cv2.line(dst, (0, v), (w-1, v), color, thickness)
                     v -= spacing_px
 
-            origin_uv = self.to_im_coor((0, 0), res, m2pixel)
+            # Determine grid origin in image coordinates
+            if grid_at_origin:
+                # Always center grid at world origin (0,0)
+                origin_uv = self.to_im_coor((0, 0), res, m2pixel)
+            else:
+                # Default: center grid at robot's current position
+                robot_xy = self.robot.state[:2, 0] if self.robot.state.shape == (3, 1) else self.robot.state[:2]
+                origin_uv = self.to_im_coor((-robot_xy[0], -robot_xy[1]), res, m2pixel)
 
             # main grid (solid grey)
             if draw_grid:

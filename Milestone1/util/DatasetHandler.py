@@ -108,7 +108,7 @@ class OutputWriter:
             os.makedirs(self.folder)
         
         self.img_f = open(folder_name+"images.txt", 'w')   
-        self.map_f = folder_name+"slam.txt"
+        self.map_f = folder_name+"slam"
 
         self.image_count = 0
         
@@ -116,12 +116,14 @@ class OutputWriter:
     #     self.img_f.close()
     #     self.map_f.close()
     
-    def write_map(self, slam):
+    def write_map(self, slam, map_id: int):
         map_dict = {"taglist":slam.taglist,
                     "map":slam.markers.tolist(),
                     "covariance":slam.P[3:,3:].tolist()}
-        with open(self.map_f, 'w') as map_f:
+        with open(f"{self.map_f}_{map_id}.txt", 'w') as map_f:
             json.dump(map_dict, map_f, indent=2)
+        
+        print(f"Map saved to {self.map_f}_{map_id}.txt")
             
     def write_image(self, image, slam):
         img_fname = "{}pred_{}.png".format(self.folder, self.image_count)

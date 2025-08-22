@@ -20,11 +20,13 @@ sys.path.insert(0, "{}/slam".format(os.getcwd()))
 from slam.ekf import EKF
 from slam.robot import Robot
 import slam.aruco_detector as aruco
+from slam.joint_optimiser import JointOptimiser2D
 
 
 class Operate:
     def __init__(self, args):
         self.folder = 'pibot_dataset/'
+        self.map_id = 0
         if not os.path.exists(self.folder):
             os.makedirs(self.folder)
         else:
@@ -52,7 +54,8 @@ class Operate:
                         'inference': False,
                         'output': False,
                         'save_inference': False,
-                        'save_image': False}
+                        'save_image': False,
+                        'optimise_now': False}
         self.quit = False
         self.pred_fname = ''
         self.request_recover_robot = False
@@ -69,6 +72,18 @@ class Operate:
         self.img = np.zeros([240,320,3], dtype=np.uint8)
         self.aruco_img = np.zeros([240,320,3], dtype=np.uint8)
         self.bg = pygame.image.load('pics/gui_mask.jpg')
+        # Robot params
+        self.left_wheel_cov = 1
+        self.right_wheel_cov = 1
+        # Joint (bundle) optimizer support
+        self.joint_optimiser = JointOptimiser2D()
+        self._joint_opt_frame_counter = 0
+        self._joint_opt_interval = None  # run automatically every N collected frames (>=2 markers)
+
+        if (self._joint_opt_interval == None):
+            print(f"Automatic optiisation is disabled")
+        else:
+            print(f"Automatic optiisation is activated every {self._joint_opt_interval} frames")
 
     # wheel control
     def control(self):    
@@ -85,7 +100,7 @@ class Operate:
             drive_meas = measure.Drive(lv, rv, dt)
         # running on physical robot (right wheel reversed)
         else:
-            drive_meas = measure.Drive(lv, -rv, dt)
+            drive_meas = measure.Drive(lv, -rv, dt, left_cov=self.left_wheel_cov, right_cov=self.right_wheel_cov)
         self.control_clock = time.time()
         return drive_meas
         
@@ -111,6 +126,58 @@ class Operate:
             self.ekf.predict(drive_meas)
             self.ekf.add_landmarks(lms)
             self.ekf.update(lms)
+            # Collect frame for joint optimization (only when SLAM running)
+            self._collect_joint_opt_frame(lms)
+
+            # Periodic automatic optimization
+            if (self._joint_opt_interval is not None and
+                self._joint_opt_frame_counter > 0 and 
+                self._joint_opt_frame_counter % self._joint_opt_interval == 0):
+                self._run_joint_optimisation(auto=True)
+
+            # Manual trigger
+            if self.command['optimise_now']:
+                self._run_joint_optimisation(auto=False)
+                self.command['optimise_now'] = False
+
+    def _collect_joint_opt_frame(self, lms):
+        """Accumulate a frame (robot pose + >=2 marker observations) for joint optimisation."""
+        if not lms or len(lms) < 2:
+            return
+        pose = self.ekf.robot.state.flatten()  # [x, y, theta]
+        obs = []
+        for lm in lms:
+            try:
+                vec = lm.position.flatten()  # body-frame 2D vector
+            except Exception:
+                continue
+            obs.append((int(lm.tag), vec))
+        if len(obs) < 2:
+            return
+        self.joint_optimiser.add_frame(pose, obs)
+        self._joint_opt_frame_counter += 1
+
+    def _run_joint_optimisation(self, auto=False):
+        self.notification = f'Optimising map please wait...'
+        cam_poses, marker_map = self.joint_optimiser.optimise()
+        if not marker_map:
+            if not auto:
+                print('[JointOpt] Not enough data to optimize (need frames with >=2 markers).')
+            return
+        # Update EKF landmark estimates with optimized values (keep covariance as-is)
+        updated = 0
+        for idx, tag in enumerate(self.ekf.taglist):
+            if tag in marker_map:
+                self.ekf.markers[:, idx] = marker_map[tag].reshape(2)
+                updated += 1
+        if auto:
+            print(f'[JointOpt][Auto] Optimised map with {len(marker_map)} markers; updated {updated}.')
+            self.notification = f'Optimised map (auto)'
+        else:
+            print(f'[JointOpt][Manual] Optimised map with {len(marker_map)} markers; updated {updated}.')
+            self.notification = f'Optimised map (manual)'
+        # (Optional) could reset optimiser to start a new batch
+        # self.joint_optimiser = JointOptimiser2D()
 
     # save images taken by the camera
     def save_image(self):
@@ -142,8 +209,9 @@ class Operate:
     # save SLAM map
     def record_data(self):
         if self.command['output']:
-            self.output.write_map(self.ekf)
-            self.notification = 'Map is saved'
+            self.output.write_map(slam=self.ekf, map_id=self.map_id)
+            self.notification = f'Map {self.map_id} is saved'
+            self.map_id += 1
             self.command['output'] = False
 
     # paint the GUI            
@@ -181,6 +249,65 @@ class Operate:
             time_remain = ""
         count_down_surface = TEXT_FONT.render(time_remain, False, (50, 50, 50))
         canvas.blit(count_down_surface, (2*h_pad+320+5, 530))
+
+        # --- Statistics Panel (right side) ---
+        try:
+            # Clear panel area to prevent text overdraw artifacts
+            panel_x_clear = 700  # left boundary of panel
+            panel_w_clear = canvas.get_width() - panel_x_clear
+            if panel_w_clear > 0:
+                panel_rect = pygame.Rect(panel_x_clear, 0, panel_w_clear, canvas.get_height())
+                pygame.draw.rect(canvas, (0, 0, 0), panel_rect)
+            # Optional vertical separator line
+            pygame.draw.line(canvas, (60, 60, 60), (panel_x_clear, 0), (panel_x_clear, canvas.get_height()), 2)
+            # Panel geometry
+            panel_x = 700  # original width boundary
+            panel_pad_x = panel_x + 10
+            panel_pad_y = v_pad
+            line_h = 24
+
+            # Header with units note (only once)
+            header = STAT_FONT.render('Stats (x,y m; θ deg)', False, (255, 255, 0))
+            canvas.blit(header, (panel_pad_x, panel_pad_y))
+            y_cursor = panel_pad_y + line_h + 4
+
+            # Frame count with >=2 markers for joint optimiser
+            frame_count = self._joint_opt_frame_counter
+            fc_text = STAT_FONT.render(f'Frames (>=2 mk): {frame_count}', False, text_colour)
+            canvas.blit(fc_text, (panel_pad_x, y_cursor))
+            y_cursor += line_h
+
+            # Robot pose
+            rx, ry, rth = self.ekf.robot.state.flatten()
+            rth_deg = np.rad2deg(rth)
+            pose_text = STAT_FONT.render(f'Robot: x={rx:.2f} y={ry:.2f} θ={rth_deg:.1f}', False, text_colour)
+            canvas.blit(pose_text, (panel_pad_x, y_cursor))
+            y_cursor += line_h
+
+            # Marker positions (estimated)
+            # Iterate over known tags and their positions
+            if hasattr(self.ekf, 'taglist') and hasattr(self.ekf, 'markers'):
+                # Pair each tag with its column index, then sort by tag (ascending)
+                tag_index_pairs = list(enumerate(self.ekf.taglist))
+                # taglist elements are expected ints; if not, attempt int conversion for sorting
+                try:
+                    tag_index_pairs.sort(key=lambda p: int(p[1]))
+                except Exception:
+                    tag_index_pairs.sort(key=lambda p: p[1])
+                for idx, tag in tag_index_pairs:
+                    if idx < self.ekf.markers.shape[1]:
+                        mx, my = self.ekf.markers[:, idx]
+                        m_text = STAT_FONT.render(f'M{int(tag)}: {mx:.2f},{my:.2f}', False, (180, 220, 255))
+                        canvas.blit(m_text, (panel_pad_x, y_cursor))
+                        y_cursor += line_h
+                        if y_cursor > 620:  # Prevent overflow; truncate if panel too small
+                            more_text = STAT_FONT.render('...more', False, (255, 100, 100))
+                            canvas.blit(more_text, (panel_pad_x, y_cursor))
+                            break
+        except Exception as e:
+            err_text = STAT_FONT.render('Stats Err', False, (255, 0, 0))
+            canvas.blit(err_text, (panel_pad_x, v_pad))
+        # --- End Statistics Panel ---
         return canvas
 
     @staticmethod
@@ -234,6 +361,9 @@ class Operate:
             # save SLAM map
             elif event.type == pygame.KEYDOWN and event.key == pygame.K_m:
                 self.command['output'] = True
+            # manual joint optimisation trigger (press 'o')
+            elif event.type == pygame.KEYDOWN and event.key == pygame.K_o:
+                self.command['optimise_now'] = True
             # reset SLAM map
             elif event.type == pygame.KEYDOWN and event.key == pygame.K_r:
                 if self.double_reset_comfirm == 0:
@@ -283,13 +413,21 @@ if __name__ == "__main__":
     parser.add_argument("--play_data", action='store_true')
     args, _ = parser.parse_known_args()
 
-    print("Operate.py V1.1")
+    print("Operate.py V1.2")
     
     pygame.font.init() 
     TITLE_FONT = pygame.font.Font('pics/8-BitMadness.ttf', 35)
     TEXT_FONT = pygame.font.Font('pics/8-BitMadness.ttf', 40)
+    # Readable system font for statistics panel (fallback to default if unavailable)
+    try:
+        STAT_FONT = pygame.font.SysFont('Arial', 20)
+    except Exception:
+        STAT_FONT = pygame.font.Font(None, 22)
     
-    width, height = 700, 660
+    # Extend width to add a statistics panel on the right (keep original area unchanged)
+    STATS_PANEL_WIDTH = 300
+    ORIGINAL_WIDTH = 700
+    width, height = ORIGINAL_WIDTH + STATS_PANEL_WIDTH, 660
     canvas = pygame.display.set_mode((width, height))
     pygame.display.set_caption('ECE4078 Lab')
     pygame.display.set_icon(pygame.image.load('pics/8bit/pibot5.png'))
@@ -331,6 +469,8 @@ if __name__ == "__main__":
         # Print the robot pose (one line)
         # Timestamped with fixed spacing
         x, y, th = operate.ekf.robot.state
+        '''
+        #print(f"Robot Pose ({pygame.time.get_ticks()} ms): x: {x[0]}, y: {y[0]}, t: {np.rad2deg(th[0])}")
         if hasattr(operate.ekf, 'taglist') and hasattr(operate.ekf, 'markers'):
             # Pair each tag with its column index, then sort by tag (ascending)
             tag_index_pairs = list(enumerate(operate.ekf.taglist))
@@ -343,3 +483,4 @@ if __name__ == "__main__":
                 if idx < operate.ekf.markers.shape[1]:
                     mx, my = operate.ekf.markers[:, idx]
                     print(f"Tag {tag} ({pygame.time.get_ticks()} ms): x: {mx}, y: {my}")
+         '''
