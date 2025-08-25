@@ -223,7 +223,11 @@ class Operate:
 
         # paint SLAM outputs
         ekf_view = self.ekf.draw_slam_state(res=(320, 480+v_pad),
-            not_pause = self.ekf_on)
+            not_pause = self.ekf_on,
+            draw_subgrid=True,
+            subgrid_spacing_m=0.3,
+            grid_at_origin=True
+            )
         canvas.blit(ekf_view, (2*h_pad+320, v_pad))
         robot_view = cv2.resize(self.aruco_img, (320, 240))
         self.draw_pygame_window(canvas, robot_view, 
@@ -279,6 +283,7 @@ class Operate:
 
             # Robot pose
             rx, ry, rth = self.ekf.robot.state.flatten()
+            rth = wrap_pi(rth)
             rth_deg = np.rad2deg(rth)
             pose_text = STAT_FONT.render(f'Robot: x={rx:.2f} y={ry:.2f} θ={rth_deg:.1f}', False, text_colour)
             canvas.blit(pose_text, (panel_pad_x, y_cursor))
@@ -400,6 +405,15 @@ class Operate:
         if self.quit:
             pygame.quit()
             sys.exit()
+
+
+def wrap_pi(angle: float) -> float:
+    """
+    Small utility function to wrap angles to the range [-pi, pi].
+    a: float The angle in radians to wrap.
+    return: float The wrapped angle in radians.
+    """
+    return (angle + np.pi) % (2*np.pi) - np.pi
 
         
 if __name__ == "__main__":

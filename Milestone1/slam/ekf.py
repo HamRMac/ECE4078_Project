@@ -374,9 +374,12 @@ class EKF:
                     surface.blit(self.lm_pics[-1], (coor_[0]-5, coor_[1]-5))
 
         # --- ORIGIN MARKERS ON TOP OF EVERYTHING ---
-        # Use world coords -> to_im_coor so arrows follow your orientation
+        # Compute world-origin image coordinate explicitly so arrows are anchored at WORLD origin
+        # (independent of whether the grid was drawn robot-centric or world-centric)
+        origin_uv = self.to_im_coor((0.0, 0.0), res, m2pixel)  # world origin (0,0) in image coords
+
         arrow_len_m = 0.2  # 20 cm arrows
-        # black '+' at origin (±5 px arms computed in world so it's consistent)
+        # black '+' at world origin (arms in world coordinates for consistency)
         plus_len_m = 0.05
         p1 = self.to_im_coor((-plus_len_m, 0.0), res, m2pixel)
         p2 = self.to_im_coor((+plus_len_m, 0.0), res, m2pixel)
@@ -385,12 +388,13 @@ class EKF:
         pygame.draw.line(surface, (0, 0, 0), p1, p2, 2)
         pygame.draw.line(surface, (0, 0, 0), p3, p4, 2)
 
-        # red +x arrow
+        # Draw axes arrows anchored at the WORLD origin (origin_uv) rather than robot position
+        # red +x arrow (world +X)
         x_tip = self.to_im_coor((arrow_len_m, 0.0), res, m2pixel)
-        pygame.draw.line(surface, (255, 0, 0), start_point_uv, x_tip, 3)
-        # green +y arrow
+        pygame.draw.line(surface, (255, 0, 0), origin_uv, x_tip, 3)
+        # green +y arrow (world +Y)
         y_tip = self.to_im_coor((0.0, arrow_len_m), res, m2pixel)
-        pygame.draw.line(surface, (0, 200, 0), start_point_uv, y_tip, 3)
+        pygame.draw.line(surface, (0, 200, 0), origin_uv, y_tip, 3)
 
         return surface
 
@@ -419,4 +423,3 @@ class EKF:
             angle = 0
         return (axes_len[0], axes_len[1]), angle
 
- 
