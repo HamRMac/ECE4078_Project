@@ -225,8 +225,9 @@ class Operate:
         ekf_view = self.ekf.draw_slam_state(res=(320, 480+v_pad),
             not_pause = self.ekf_on,
             draw_subgrid=True,
+            grid_spacing_m=0.9,
             subgrid_spacing_m=0.3,
-            grid_at_origin=True
+            grid_at_origin=False
             )
         canvas.blit(ekf_view, (2*h_pad+320, v_pad))
         robot_view = cv2.resize(self.aruco_img, (320, 240))
