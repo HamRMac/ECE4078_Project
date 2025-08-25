@@ -118,7 +118,11 @@ class JointOptimiser2D:
         if len(self.frames) == 1 and self._GAUGE_MODE in ("prior_full", "prior_yaw", "fix_pose0"):
             self._pose0_ref = np.array(pose, dtype=float)
 
-    def optimise(self, max_iters: int = 25, lambda_init: float = 1e-2, tol: float = 1e-6):
+    def optimise(self,
+                 max_iters: int = 25,
+                 lambda_init: float = 1e-2,
+                 tol: float = 1e-6,
+                 method: str = "dense"):
         """Run joint optimisation. Returns (camera_poses, marker_map).
 
         camera_poses: list of np.array([x,y,theta]) following input frame order
@@ -202,47 +206,57 @@ class JointOptimiser2D:
             if err > prev_err + 1e6:
                 break
 
-            # --- Build Jacobian matrix ---
-            nObs = len(blocks)  # Number of observations
-            dim = S.size        # Size of state vector
-            J = np.zeros((2*nObs, dim))  # Jacobian matrix
-            for obs_i, (frame_idx, mid, b) in enumerate(blocks):
-                row = 2*obs_i
-                k = m_index[mid] # Marker index
-                m_off = self._marker_offset(k, nF) # Offset for marker position in state vector
+            # --- Choose LM step implementation ---
+            method_l = method.lower()
+            if method_l not in ("dense", "schur"):
+                raise ValueError(f"Unknown method: {method}")
 
-                # W.R.T marker position
-                J[row:row+2, m_off:m_off+2] = np.eye(2)
+            if method_l == "dense":
+                # --- Build Jacobian matrix (dense path) ---
+                nObs = len(blocks)
+                dim  = S.size
+                J = np.zeros((2*nObs, dim))
+                for obs_i, (frame_idx, mid, b) in enumerate(blocks):
+                    row = 2*obs_i
+                    k = m_index[mid]
+                    m_off = self._marker_offset(k, nF)
 
-                # W.R.T frame pose (if it is a variable)
-                f_off = self._pose_offset(frame_idx) # Offset for frame pose in state vector
-                if f_off is not None:
-                    xj, yj, thj = S[f_off:f_off+3]
-                    c, s = np.cos(thj), np.sin(thj)
-                    dR_dth = np.array([[-s, -c],[c, -s]])
-                    J[row:row+2, f_off:f_off+2] = -np.eye(2)
-                    J[row:row+2, f_off+2]       = - (dR_dth @ b)
-                else:
-                    # pose 0 fixed: no columns for x0,y0,th0
-                    pass
+                    # wrt marker
+                    J[row:row+2, m_off:m_off+2] = np.eye(2)
 
-            # Append prior if enabled and we actually have a recorded first frame
-            if self._GAUGE_MODE == "prior_full" and self._pose0_ref is not None and not self._fix_pose0():
-                J, r_vec = self._add_pose0_prior_full(J, r_vec, S, self._pose0_ref, self._OPT_PRIOR_SIGMAS)
-            elif self._GAUGE_MODE == "prior_yaw" and self._pose0_ref is not None and not self._fix_pose0():
-                J, r_vec = self._add_pose0_prior_yaw(J, r_vec, S, self._pose0_ref, self._YAW_PRIOR_DEG)
+                    # wrt frame (if variable)
+                    f_off = self._pose_offset(frame_idx)
+                    if f_off is not None:
+                        xj, yj, thj = S[f_off:f_off+3]
+                        c, s = np.cos(thj), np.sin(thj)
+                        dR_dth = np.array([[-s, -c],[c, -s]])
+                        J[row:row+2, f_off:f_off+2] = -np.eye(2)
+                        J[row:row+2, f_off+2]       = - (dR_dth @ b)
 
-            # --- Levenberg–Marquardt update step ---
-            JTJ = J.T @ J  # Hessian approximation
-            g = J.T @ r_vec  # Gradient
-            # Damped Hessian (Levenberg–Marquardt)
-            A = JTJ + lamb * np.diag(np.diag(JTJ))
-            try:
-                # Solve for update step
-                delta = -np.linalg.pinv(A) @ g
-            except np.linalg.LinAlgError:
-                # If matrix is singular, break
-                break
+                # Append prior rows only if pose0 is in the state
+                r_vec_aug = r_vec
+                if self._GAUGE_MODE == "prior_full" and self._pose0_ref is not None and not self._fix_pose0():
+                    J, r_vec_aug = self._add_pose0_prior_full(J, r_vec_aug, S, self._pose0_ref, self._OPT_PRIOR_SIGMAS)
+                elif self._GAUGE_MODE == "prior_yaw" and self._pose0_ref is not None and not self._fix_pose0():
+                    J, r_vec_aug = self._add_pose0_prior_yaw(J, r_vec_aug, S, self._pose0_ref, self._YAW_PRIOR_DEG)
+
+                # --- Levenberg–Marquardt update (dense) ---
+                JTJ = J.T @ J
+                g   = J.T @ r_vec_aug
+                A   = JTJ + lamb * np.diag(np.diag(JTJ))
+                try:
+                    delta = -np.linalg.solve(A, g)
+                except np.linalg.LinAlgError:
+                    delta = -np.linalg.pinv(A) @ g
+
+            else:
+                # --- Schur-complement LM step (poses-only reduced system) ---
+                use_prior = (self._GAUGE_MODE in ("prior_full", "prior_yaw")
+                            and self._pose0_ref is not None
+                            and not self._fix_pose0())
+                delta = self._lm_step_schur(S, m_index, marker_ids, nF, lamb,
+                                            use_prior=use_prior, prior_mode=self._GAUGE_MODE)
+
 
             # If update step is very small, stop (converged)
             if np.linalg.norm(delta) < tol:
@@ -305,6 +319,138 @@ class JointOptimiser2D:
         # Return corrected poses and markers
         return cam_poses, marker_map
 
+    def _lm_step_schur(self, S, m_index, marker_ids, nF, lamb,
+                   use_prior: bool, prior_mode: str):
+        """
+        One LM step via Schur complement:
+        1) Build reduced normal equations over poses only.
+        2) Solve for Δposes.
+        3) Back-substitute Δmarkers.
+        Returns: full delta vector matching S.shape.
+        """
+        pose_dim = self._n_pose_vars(nF)
+        A   = np.zeros((pose_dim, pose_dim))  # reduced Hessian over poses
+        gp  = np.zeros(pose_dim)              # reduced gradient over poses
+
+        # Group observations by marker: for each marker k, store list of (pose_off, Jp_ij, r_ij)
+        obs_by_marker = {m_index[mid]: [] for mid in marker_ids}
+
+        # Pass 1: accumulate per-pose blocks and stash per-marker triplets
+        for j, f in enumerate(self.frames):
+            # pose at current linearization point
+            if self._fix_pose0() and j == 0:
+                xj, yj, thj = self._pose0_ref
+                f_off = None
+            else:
+                f_off = self._pose_offset(j)
+                xj, yj, thj = S[f_off:f_off+3]
+            c, s = np.cos(thj), np.sin(thj)
+            Rj = np.array([[c, -s],[s, c]])
+            dR_dth = np.array([[-s, -c],[c, -s]])
+
+            for mid, b in f["obs"]:
+                k = m_index[mid]
+                m_off = self._marker_offset(k, nF)
+                Mk = S[m_off:m_off+2]
+                pred = np.array([xj, yj]) + Rj @ b
+                r = Mk - pred  # 2-vector
+
+                # Jp block (2x3) for this observation: [-I2 | -(dR_dth@b)]
+                Jp = np.zeros((2,3))
+                Jp[:, 0:2] = -np.eye(2)
+                Jp[:, 2]   = -(dR_dth @ b)
+
+                # Accumulate into reduced pose system for this single obs (diagonal block)
+                if f_off is not None:
+                    A[f_off:f_off+3, f_off:f_off+3] += Jp.T @ Jp
+                    gp[f_off:f_off+3]               += Jp.T @ r
+
+                # Stash triplet (we'll form Schur coupling across obs of the same marker)
+                obs_by_marker[k].append((f_off, Jp, r))
+
+        # Levenberg damping on the reduced pose system
+        A += lamb * np.diag(np.diag(A))
+
+        # Add priors directly to the reduced system if pose0 is present
+        if use_prior and not self._fix_pose0():
+            if prior_mode == "prior_full":
+                sx, sy, sdeg = self._OPT_PRIOR_SIGMAS
+                sth = np.deg2rad(sdeg)
+                W = np.diag([1.0/sx, 1.0/sy, 1.0/sth])
+                W2  = W @ W
+                dth = self._wrap_pi(S[2] - self._pose0_ref[2])
+                rp  = np.array([S[0]-self._pose0_ref[0], S[1]-self._pose0_ref[1], dth])
+                A[0:3, 0:3] += W2
+                gp[0:3]     += W2 @ rp
+            elif prior_mode == "prior_yaw":
+                sth = np.deg2rad(self._YAW_PRIOR_DEG)
+                w2 = 1.0/(sth**2)
+                dth = self._wrap_pi(S[2] - self._pose0_ref[2])
+                A[2,2] += w2
+                gp[2]  += w2 * dth
+
+        # Schur reduction: subtract marker coupling terms
+        # With Jm = I2, each marker's H_mm = count_i * I2 and Cinv = (1/count_i) * I2
+        S_p = A.copy()
+        b_p = gp.copy()
+
+        for k, obs_list in obs_by_marker.items():
+            if not obs_list:
+                continue
+            count_i = len(obs_list)
+            Cinv = 1.0 / max(count_i, 1)
+
+            # gm_i = sum r_ij (2-vector)
+            gm_i = np.sum([r for (_,_,r) in obs_list], axis=0)
+
+            # Vector term: b_p -= Jp^T Cinv gm_i
+            for (off_a, Jp_a, _) in obs_list:
+                if off_a is not None:
+                    b_p[off_a:off_a+3] -= Cinv * (Jp_a.T @ gm_i)
+
+            # Matrix term: S_p -= Jp_a^T Cinv Jp_b for all obs pairs (a,b) that are on poses
+            for (off_a, Jp_a, _) in obs_list:
+                if off_a is None:
+                    continue
+                a_sl = slice(off_a, off_a+3)
+                JaT = Jp_a.T
+                for (off_b, Jp_b, _) in obs_list:
+                    if off_b is None:
+                        continue
+                    b_sl = slice(off_b, off_b+3)
+                    S_p[a_sl, b_sl] -= Cinv * (JaT @ Jp_b)
+
+        # Solve reduced system for Δposes
+        try:
+            delta_p = -np.linalg.solve(S_p, b_p)
+        except np.linalg.LinAlgError:
+            delta_p = -np.linalg.pinv(S_p) @ b_p
+
+        # Back-substitute Δmarkers: dm_i = Cinv*(gm_i - sum_j Jp_ij Δp_j)
+        delta = np.zeros_like(S)
+        # scatter pose deltas
+        for j in range(nF):
+            off = self._pose_offset(j)
+            if off is not None:
+                delta[off:off+3] = delta_p[off:off+3]
+
+        for k, obs_list in obs_by_marker.items():
+            if not obs_list:
+                continue
+            count_i = len(obs_list)
+            Cinv = 1.0 / max(count_i, 1)
+            gm_i = np.sum([r for (_,_,r) in obs_list], axis=0)
+            accum = np.zeros(2)
+            for (off_j, Jp_j, _) in obs_list:
+                if off_j is not None:
+                    accum += Jp_j @ delta_p[off_j:off_j+3]
+            dm_i = Cinv * (gm_i - accum)
+            m_off = self._marker_offset(k, nF)
+            delta[m_off:m_off+2] = dm_i
+
+        return delta
+
+    
     def _wrap_pi(self, a: float) -> float:
         """
         Small utility function to wrap angles to the range [-pi, pi].

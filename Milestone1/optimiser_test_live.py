@@ -10,6 +10,8 @@ from slam.joint_optimiser import JointOptimiser2D
 from os import makedirs
 from tqdm import tqdm
 
+method = "dense"
+
 # ---------- small helpers ----------
 def R(th):
     c, s = np.cos(th), np.sin(th)
@@ -111,7 +113,7 @@ def run_live_demo():
             opt.add_frame(pose_guess, obs)
 
             # Online optimise a little each time (few iterations)
-            cam_opt, map_opt = opt.optimise(max_iters=8, lambda_init=1e-2)
+            cam_opt, map_opt = opt.optimise(max_iters=8, lambda_init=1e-2, tol=1e-6, method="schur")
 
             # EKF-only cumulative map using the same kept_frames
             map_ekf = ekf_only_map(kept_frames)
@@ -202,9 +204,11 @@ def run_live_demo():
     plt.plot(last["poses_true"][:,0], last["poses_true"][:,1], linestyle='--', label='True poses (kept)')
     plt.plot(last["poses_ekf"][:,0],  last["poses_ekf"][:,1],  label='EKF poses')
     plt.plot(last["poses_opt"][:,0],  last["poses_opt"][:,1],  label='Optim poses')
-    plt.axis("equal"); plt.legend(); plt.title("Final snapshot")
-    plt.tight_layout(); plt.savefig(optimiser_tests_location + "/optimiser_live_final.png")
-    print("Saved optimiser_live_final.png")
+    plt.axis("equal"); plt.legend(); plt.title(f"Final snapshot {method}")
+    plt.tight_layout(); plt.savefig(optimiser_tests_location + f"/optimiser_live_final_{method}.png")
+    print(f"Saved optimiser_live_final_{method}.png")
 
 if __name__ == "__main__":
+    method = "schur"
+    print("Running live optimiser demo (v3)...")
     run_live_demo()
