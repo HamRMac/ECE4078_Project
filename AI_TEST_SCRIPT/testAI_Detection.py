@@ -33,6 +33,10 @@ from threading import Thread, Event, Lock
 
 import cv2
 import numpy as np
+try:
+	import torch
+except Exception:  # pragma: no cover
+	torch = None  # type: ignore
 
 try:
 	from ultralytics import YOLO  # type: ignore
@@ -307,6 +311,21 @@ def class_agnostic_merge(boxes: np.ndarray, confs: np.ndarray, clss: np.ndarray,
 	return keep
 
 
+def select_device(user_choice: str) -> str:
+	"""Resolve device string.
+
+	user_choice 'auto' -> prefer CUDA, then MPS (Apple), else CPU.
+	Otherwise return the user string unchanged.
+	"""
+	if user_choice != 'auto':
+		return user_choice
+	if torch is not None and torch.cuda.is_available():
+		return 'cuda:0'
+	if torch is not None and hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():  # Apple Silicon
+		return 'mps'
+	return 'cpu'
+
+
 def run(args):
 	"""Main execution loop.
 
@@ -316,6 +335,13 @@ def run(args):
 	4. Display with FPS overlay; allow quitting with 'q'
 	"""
 	model = YOLO(args.model)
+	device = select_device(args.device)
+	try:
+		# ultralytics YOLO exposes .to(device) for underlying torch model
+		model.to(device)  # type: ignore[attr-defined]
+		print(f"Using device: {device}")
+	except Exception as e:  # pragma: no cover
+		print(f"Warning: could not move model to {device}: {e}")
 	names = model.model.names if hasattr(model, 'model') else getattr(model, 'names', {})  # type: ignore
 	if not isinstance(names, dict):
 		names = {i: str(n) for i, n in enumerate(names)}
@@ -398,6 +424,7 @@ def build_argparser():
 	p.add_argument('--min-conf', type=float, default=0.25, dest='min_conf', help='Minimum confidence to display')
 	p.add_argument('--class-colors', type=str, default=None, help='Comma list like "0:#FF0000,1:#00FF00" for custom colors')
 	p.add_argument('--merge-iou', type=float, default=0.5, dest='merge_iou', help='Class-agnostic IoU threshold to merge overlapping boxes (<=0 disables)')
+	p.add_argument('--device', type=str, default='auto', help="Device: 'auto', 'cpu', 'cuda:0', 'mps', etc.")
 	return p
 
 
