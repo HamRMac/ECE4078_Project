@@ -13,7 +13,7 @@ class Detector:
         self.class_colour = {
             'orange': (0, 165, 255),
             'lemon': (0, 255, 255),
-            'lime': (0, 255, 0),
+            'pear': (0, 255, 0),
             'tomato': (0, 0, 255),
             'capsicum': (255, 0, 0),
             'potato': (255, 255, 0),
@@ -88,14 +88,17 @@ if __name__ == '__main__':
     # get current script directory
     script_dir = os.path.dirname(os.path.abspath(__file__))
 
-    yolo = Detector(f'{script_dir}/model/yolov8_model.pt')
 
-    img = cv2.imread(f'{script_dir}/test/test_image_1.png')
+    for entry in os.scandir(f'{script_dir}/test'):
+        yolo = Detector(f'{script_dir}/model/last_V4.pt')
+        print(entry.path)
 
-    bboxes, img_out = yolo.detect_single_image(img)
+        img = cv2.imread(entry.path)
 
-    print(bboxes)
-    print(len(bboxes))
+        bboxes, img_out = yolo.detect_single_image(img)
 
-    cv2.imshow('yolo detect', img_out)
-    cv2.waitKey(0)
+        print(bboxes)
+        print(len(bboxes))
+
+        cv2.imshow('yolo detect', img_out)
+        cv2.waitKey(0)
