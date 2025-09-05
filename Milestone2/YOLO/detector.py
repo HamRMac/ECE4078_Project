@@ -15,7 +15,7 @@ class Detector:
             'lemon': (0, 255, 255),
             'pear': (0, 255, 0),
             'tomato': (0, 0, 255),
-            'capcicum': (255, 0, 0),
+            'capsicum': (255, 0, 0),
             'potato': (255, 255, 0),
             'pumpkin': (255, 165, 0),
             'garlic': (255, 0, 255)
@@ -90,7 +90,7 @@ if __name__ == '__main__':
 
 
     for entry in os.scandir(f'{script_dir}/test'):
-        yolo = Detector(f'{script_dir}/model/best_V3.pt')
+        yolo = Detector(f'{script_dir}/model/epoch10_V4.pt')
         print(entry.path)
 
         img = cv2.imread(entry.path)
