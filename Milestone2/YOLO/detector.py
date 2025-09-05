@@ -90,7 +90,7 @@ if __name__ == '__main__':
 
 
     for entry in os.scandir(f'{script_dir}/test'):
-        yolo = Detector(f'{script_dir}/model/epoch10_V4.pt')
+        yolo = Detector(f'{script_dir}/model/last_V4.pt')
         print(entry.path)
 
         img = cv2.imread(entry.path)
