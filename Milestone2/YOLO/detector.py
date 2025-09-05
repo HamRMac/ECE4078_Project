@@ -90,7 +90,7 @@ if __name__ == '__main__':
 
 
     for entry in os.scandir(f'{script_dir}/test'):
-        yolo = Detector(f'{script_dir}/model/yolov11_last_V1.pt')
+        yolo = Detector(f'{script_dir}/model/yolov11_last_V2.pt')
         print(entry.path)
 
         img = cv2.imread(entry.path)
