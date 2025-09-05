@@ -93,6 +93,9 @@ def merge_estimations(target_pose_dict, eps=0.15, min_samples=2):
     ######### Replace with your codes #########
     # TODO: replace it with a solution to merge the multiple occurrences of the same class type (e.g., by a distance threshold)
     # Convert dict to list of (class, x, y)
+    target_est = {}
+
+    # Convert dict to list of (class, x, y)
     detections = []
     for key, pose in target_pose_dict.items():
         target_type = key.split('_')[0]
@@ -100,6 +103,7 @@ def merge_estimations(target_pose_dict, eps=0.15, min_samples=2):
 
     # Process per class
     for target_type in set([d[0] for d in detections]):
+        # Get detections for this class
         coords = np.array([[d[1], d[2]] for d in detections if d[0] == target_type])
 
         if len(coords) == 0:
@@ -107,12 +111,12 @@ def merge_estimations(target_pose_dict, eps=0.15, min_samples=2):
 
         clustering = DBSCAN(eps=eps, min_samples=min_samples).fit(coords)
 
-        
         cluster_id = 0
         for cid in set(clustering.labels_):
             if cid == -1:  # noise
                 continue
             cluster_points = coords[clustering.labels_ == cid]
+            # Use mean (or median) as cluster centre
             x_mean, y_mean = cluster_points.mean(axis=0)
             target_est[f"{target_type}_{cluster_id}"] = {"x": float(x_mean),
                                                          "y": float(y_mean)}
