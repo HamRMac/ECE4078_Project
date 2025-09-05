@@ -4,9 +4,13 @@ import json
 import os
 import ast
 import cv2
+# plotting (added for visualising detections)
+import matplotlib.pyplot as plt
 from YOLO.detector import Detector
 from sklearn.cluster import DBSCAN
 
+# Default to None
+yolo = None
 
 # list of target fruits and vegs types
 # Make sure the names are the same as the ones used in your YOLO model
@@ -171,3 +175,56 @@ if __name__ == "__main__":
         json.dump(target_est, fo, indent=4)
 
     print('Estimations saved!')
+
+    # --------------------
+    # Plot detections in arena (2.4m x 2.4m), AR=1
+    # - Pre-clustering points: reduced opacity
+    # - Post-clustering points: full opacity
+    # - Colors per class from yolo.class_colour
+    # --------------------
+    try:
+        plot_arena_size = 2.4
+        plot_bound = plot_arena_size / 2.0
+
+        fig, ax = plt.subplots(figsize=(6, 6))
+        ax.set_xlim(-plot_bound, plot_bound)
+        ax.set_ylim(-plot_bound, plot_bound)
+        ax.set_aspect('equal', adjustable='box')  # ensure AR = 1
+        ax.set_xlabel('x [m]')
+        ax.set_ylabel('y [m]')
+        ax.set_title('Fruit Positions: pre (transparent) vs post (solid) clustering')
+        ax.grid(True, linestyle=':', linewidth=0.5)
+
+        # Helper to convert OpenCV BGR (0-255) to Matplotlib RGB (0-1)
+        def bgr_to_rgb01(bgr):
+            return (bgr[2] / 255.0, bgr[1] / 255.0, bgr[0] / 255.0)
+
+        # Plot pre-clustering detections with reduced opacity
+        pre_by_class = {}
+        for key, pose in target_pose_dict.items():
+            cls = key.split('_')[0]
+            pre_by_class.setdefault(cls, []).append((pose['x'], pose['y']))
+
+        for cls, pts in pre_by_class.items():
+            color_rgb = bgr_to_rgb01(yolo.class_colour.get(cls, (128, 128, 128)))
+            xs = [p[0] for p in pts]
+            ys = [p[1] for p in pts]
+            # Pre-cluster points: small size, transparent
+            ax.scatter(xs, ys, c=[color_rgb], alpha=0.35, s=25, edgecolors='none')
+
+        # Plot post-clustering estimations with full opacity
+        post_by_class = {}
+        for key, pose in target_est.items():
+            cls = key.split('_')[0]
+            post_by_class.setdefault(cls, []).append((pose['x'], pose['y']))
+
+        for cls, pts in post_by_class.items():
+            color_rgb = bgr_to_rgb01(yolo.class_colour.get(cls, (64, 64, 64)))
+            xs = [p[0] for p in pts]
+            ys = [p[1] for p in pts]
+            # Post-cluster points: larger size, solid, thin edge
+            ax.scatter(xs, ys, c=[color_rgb], alpha=1.0, s=50, edgecolors='black', linewidths=0.5)
+
+        plt.show()
+    except Exception as e:
+        print(f'Plotting failed: {e}')
