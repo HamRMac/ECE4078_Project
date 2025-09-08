@@ -270,12 +270,12 @@ class Operate:
         # Save detector inference snapshot
         if self.command['save_inference']:
             if self.file_output is not None:
-                if not self.saved_inference:
-                    self.pred_fname = self.output.write_image(self.file_output[0], self.file_output[1])
-                    self.notification = f'New Prediction saved -> {self.pred_fname}'
+                    self.pred_fname = self.output.write_image(self.file_output[0], self.file_output[1]) 
+                    if not self.saved_inference:
+                        self.notification = f'New Prediction saved -> {self.pred_fname}'
+                    else:
+                        self.notification = f'Duplicate Prediction saved -> {self.pred_fname}'
                     self.saved_inference = True
-                else:
-                    self.notification = 'This prediction has already been saved!'
             else:
                 self.notification = 'No prediction in buffer, save ignored'
             self.command['save_inference'] = False
