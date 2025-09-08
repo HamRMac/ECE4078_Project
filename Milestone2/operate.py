@@ -87,6 +87,7 @@ class Operate:
         self.pred_fname = ''
         self.request_recover_robot = False
         self.file_output = None
+        self.saved_inference = False
         self.ekf_on = False
         self.double_reset_comfirm = 0
         self.image_id = 0
@@ -228,6 +229,7 @@ class Operate:
 
             # self.command['inference'] = False     # uncomment this if you do not want to continuously predict
             self.file_output = (yolo_input_img, self.ekf)
+            self.saved_inference = False
 
             # self.notification = f'{len(self.detector_output)} target type(s) detected'
 
@@ -268,8 +270,12 @@ class Operate:
         # Save detector inference snapshot
         if self.command['save_inference']:
             if self.file_output is not None:
-                self.pred_fname = self.output.write_image(self.file_output[0], self.file_output[1])
-                self.notification = f'Prediction saved -> {self.pred_fname}'
+                if not self.saved_inference:
+                    self.pred_fname = self.output.write_image(self.file_output[0], self.file_output[1])
+                    self.notification = f'New Prediction saved -> {self.pred_fname}'
+                    self.saved_inference = True
+                else:
+                    self.notification = 'This prediction has already been saved!'
             else:
                 self.notification = 'No prediction in buffer, save ignored'
             self.command['save_inference'] = False
