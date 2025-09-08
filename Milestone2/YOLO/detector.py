@@ -53,6 +53,65 @@ class Detector:
 
         return bboxes, img_out
 
+    def detect_images(self, imgs, max_batch=8):
+        """
+        Detect targets in multiple images, processing up to `max_batch` images in parallel.
+
+        input:
+            imgs: list of images (as from cv2.imread)
+            max_batch: int, maximum number of images to process concurrently
+        output:
+            results: list with same length as `imgs`, each element is a tuple
+                     (bboxes, img_out) where
+                        - bboxes is a list of [label, [x,y,width,height]]
+                        - img_out is the input image with boxes and labels drawn
+        """
+        if imgs is None:
+            return []
+
+        def _extract_bboxes(pred):
+            bboxes = []
+            boxes = pred.boxes
+            for box in boxes:
+                box_cord = box.xywh[0]
+                box_label = box.cls
+                bboxes.append([pred.names[int(box_label)], np.asarray(box_cord)])
+            return bboxes
+
+        results_out = []
+        n = len(imgs)
+        if n == 0:
+            return results_out
+
+        start = 0
+        while start < n:
+            end = min(start + max_batch, n)
+            batch = imgs[start:end]
+
+            predictions = self.model.predict(batch, imgsz=320, verbose=False)
+
+            # predictions is iterable of Results aligned with batch
+            for i, pred in enumerate(predictions):
+                bboxes = _extract_bboxes(pred)
+                img_out = deepcopy(batch[i])
+
+                # draw bounding boxes and labels
+                for bbox in bboxes:
+                    xyxy = ops.xywh2xyxy(bbox[1])
+                    x1 = int(xyxy[0])
+                    y1 = int(xyxy[1])
+                    x2 = int(xyxy[2])
+                    y2 = int(xyxy[3])
+                    color = self.class_colour.get(bbox[0], (128, 128, 128))
+                    img_out = cv2.rectangle(img_out, (x1, y1), (x2, y2), color, thickness=2)
+                    img_out = cv2.putText(img_out, bbox[0], (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+
+                results_out.append((bboxes, img_out))
+
+            start = end
+
+        return results_out
+
     def _get_bounding_boxes(self, cv_img):
         """
         function:

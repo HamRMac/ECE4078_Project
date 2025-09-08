@@ -11,6 +11,12 @@ from matplotlib.offsetbox import OffsetImage, AnnotationBbox
 import matplotlib.image as mpimg
 from YOLO.detector import Detector
 from sklearn.cluster import DBSCAN
+try:
+    from tqdm.auto import tqdm
+except Exception:
+    # Fallback: define a no-op tqdm
+    def tqdm(iterable=None, **kwargs):
+        return iterable
 
 # Default to None
 yolo = None
@@ -152,21 +158,28 @@ if __name__ == "__main__":
             pose_dict = ast.literal_eval(line)
             image_poses[pose_dict['imgfname']] = pose_dict['pose']
 
-    # estimate pose of targets in each image
+    # estimate pose of targets using batched detection for speed
     target_pose_dict = {}
     detected_type_list = []
-    for image_path in image_poses.keys():
-        input_image = cv2.imread(image_path)
-        bounding_boxes, bbox_img = yolo.detect_single_image(input_image)
-        # cv2.imshow('bbox', bbox_img)
-        # cv2.waitKey(0)
+
+    # Prepare images and paths in a stable order
+    image_paths = list(image_poses.keys())
+    images = [cv2.imread(p) for p in image_paths]
+
+    # Process in batches
+    MAX_BATCH = 8
+    batch_results = yolo.detect_images(images, max_batch=MAX_BATCH)
+
+    for idx, (bounding_boxes, bbox_img) in enumerate(
+        tqdm(batch_results, total=len(batch_results), desc="Processing detections")
+    ):
+        image_path = image_paths[idx]
         robot_pose = image_poses[image_path]
 
         for detection in bounding_boxes:
             # count the occurrence of each target type
             occurrence = detected_type_list.count(detection[0])
             target_pose_dict[f'{detection[0]}_{occurrence}'] = estimate_pose(camera_matrix, detection, robot_pose)
-
             detected_type_list.append(detection[0])
 
     # merge the estimations of the targets so that there are at most 3 estimations of each target type
