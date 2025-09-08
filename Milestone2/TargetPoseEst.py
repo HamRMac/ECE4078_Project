@@ -7,6 +7,8 @@ import cv2
 # plotting (added for visualising detections)
 import matplotlib.pyplot as plt
 from matplotlib.ticker import MultipleLocator
+from matplotlib.offsetbox import OffsetImage, AnnotationBbox
+import matplotlib.image as mpimg
 from YOLO.detector import Detector
 from sklearn.cluster import DBSCAN
 
@@ -15,7 +17,7 @@ yolo = None
 
 # list of target fruits and vegs types
 # Make sure the names are the same as the ones used in your YOLO model
-TARGET_TYPES = ['orange', 'lemon', 'lime', 'tomato', 'capsicum', 'potato', 'pumpkin', 'garlic']
+TARGET_TYPES = ['orange', 'lemon', 'pear', 'tomato', 'capsicum', 'potato', 'pumpkin', 'garlic']
 ARENA_SIZE  = 2.7
 ARENA_BOUND = ARENA_SIZE / 2.0  # ±1.35 m
 
@@ -217,18 +219,11 @@ if __name__ == "__main__":
             # Pre-cluster points: small size, transparent
             ax.scatter(xs, ys, c=[color_rgb], alpha=0.35, s=25, edgecolors='none')
 
-        # Plot post-clustering estimations with full opacity
+        # Prepare post-clustering points grouped by class
         post_by_class = {}
         for key, pose in target_est.items():
             cls = key.split('_')[0]
             post_by_class.setdefault(cls, []).append((pose['x'], pose['y']))
-
-        for cls, pts in post_by_class.items():
-            color_rgb = bgr_to_rgb01(yolo.class_colour.get(cls, (64, 64, 64)))
-            xs = [p[0] for p in pts]
-            ys = [p[1] for p in pts]
-            # Post-cluster points: larger size, solid, thin edge
-            ax.scatter(xs, ys, c=[color_rgb], alpha=1.0, s=50, edgecolors='black', linewidths=0.5)
 
         # Draw cluster outlines (convex hull per DBSCAN cluster of pre-cluster points)
         eps, min_samples = 0.15, 2  # keep in sync with merge_estimations defaults
@@ -254,6 +249,46 @@ if __name__ == "__main__":
                 hy = np.r_[hull[:, 1], hull[0, 1]]
                 ax.plot(hx, hy, color=color_rgb, linewidth=1.2)
                 ax.fill(hull[:, 0], hull[:, 1], color=color_rgb, alpha=0.10)
+
+        # Load pixel art icons
+        pixel_art_dir = os.path.join(script_dir, 'pixel_art')
+        pixel_icons = {}
+        if os.path.isdir(pixel_art_dir):
+            for fname in os.listdir(pixel_art_dir):
+                if not fname.lower().endswith('.png'):
+                    continue
+                key = os.path.splitext(fname)[0].lower()
+                try:
+                    img = mpimg.imread(os.path.join(pixel_art_dir, fname))
+                    # Ensure image is in RGBA or RGB float format
+                    pixel_icons[key] = img
+                except Exception as _:
+                    pass
+
+        # Overlay pixel art at final (post-cluster) locations; fallback to dot if missing
+        ICON_SIZE_PX = 56  # target visual size for the longest image side
+
+        def add_icon(ax, xy, img, size_px=ICON_SIZE_PX, z=5):
+            h, w = img.shape[:2]
+            scale = size_px / float(max(h, w))
+            oi = OffsetImage(img, zoom=scale)
+            ab = AnnotationBbox(oi, xy, frameon=False, pad=0.0, box_alignment=(0.5, 0.5),
+                                annotation_clip=True, zorder=z)
+            ax.add_artist(ab)
+
+        # Draw cluster outlines first (already drawn above), then icons on top
+        for cls, pts in post_by_class.items():
+            icon = pixel_icons.get(cls.lower())
+            if icon is None:
+                # Fallback to solid dots for classes without an icon
+                color_rgb = bgr_to_rgb01(yolo.class_colour.get(cls, (64, 64, 64)))
+                xs = [p[0] for p in pts]
+                ys = [p[1] for p in pts]
+                ax.scatter(xs, ys, c=[color_rgb], alpha=1.0, s=50, edgecolors='black', linewidths=0.5, zorder=4)
+                continue
+
+            for (x, y) in pts:
+                add_icon(ax, (x, y), icon)
 
         plt.show()
     except Exception as e:
