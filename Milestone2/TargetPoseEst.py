@@ -279,7 +279,7 @@ if __name__ == "__main__":
                     pass
 
         # Overlay pixel art at final (post-cluster) locations; fallback to dot if missing
-        ICON_SIZE_PX = 56  # target visual size for the longest image side
+        ICON_SIZE_PX = 10  # target visual size for the longest image side
 
         def add_icon(ax, xy, img, size_px=ICON_SIZE_PX, z=5):
             h, w = img.shape[:2]

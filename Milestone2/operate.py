@@ -115,6 +115,15 @@ class Operate:
         self.left_wheel_cov = 1
         self.right_wheel_cov = 1
 
+        # Detector FPS throttling (non-blocking)
+        # Default 1 FPS, configurable via --detector_fps
+        try:
+            self.detector_fps = float(getattr(args, 'detector_fps', 1.0))
+        except Exception:
+            self.detector_fps = 1.0
+        self._detector_min_interval = 0.0 if self.detector_fps <= 0 else (1.0 / self.detector_fps)
+        self._last_detect_ts = 0.0
+
     # wheel control
     def control(self):
         if args.play_data:
@@ -204,10 +213,15 @@ class Operate:
     # using computer vision to detect targets
     def detect_target(self):
         if self.command['inference'] and self.detector is not None:
+            # Non-blocking FPS throttle
+            now = time.time()
+            if self._detector_min_interval > 0 and (now - self._last_detect_ts) < self._detector_min_interval:
+                return
             # need to convert the colour before passing to YOLO
             yolo_input_img = cv2.cvtColor(self.img, cv2.COLOR_RGB2BGR)
 
             self.detector_output, self.yolo_vis = self.detector.detect_single_image(yolo_input_img)
+            self._last_detect_ts = now
 
             # covert the colour back for display purpose
             self.yolo_vis = cv2.cvtColor(self.yolo_vis, cv2.COLOR_RGB2BGR)
@@ -448,6 +462,8 @@ if __name__ == "__main__":
     parser.add_argument("--save_data", action='store_true')
     parser.add_argument("--play_data", action='store_true')
     parser.add_argument("--yolo_model", default='YOLO/model/yoloV11_10_V2.pt')
+    parser.add_argument("--detector_fps", type=float, default=1.0,
+                        help="Max detector runs per second (non-blocking throttle). 0 or negative disables throttling.")
     args, _ = parser.parse_known_args()
 
     print("----- PiBot Teleoperation & SLAM (M1+M2) -----")
@@ -458,6 +474,10 @@ if __name__ == "__main__":
     if args.play_data:
         print("Data playback is enabled.")
     print(f"Using YOLO model: {args.yolo_model}")
+    try:
+        print(f"Detector FPS limit: {args.detector_fps} fps")
+    except Exception:
+        pass
 
     pygame.font.init()
     TITLE_FONT = pygame.font.Font('pics/8-BitMadness.ttf', 35)
