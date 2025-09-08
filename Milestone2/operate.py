@@ -467,7 +467,7 @@ if __name__ == "__main__":
     parser.add_argument("--calib_dir", type=str, default="calibration/param/")
     parser.add_argument("--save_data", action='store_true')
     parser.add_argument("--play_data", action='store_true')
-    parser.add_argument("--yolo_model", default='YOLO/model/yoloV11_10_V2.pt')
+    parser.add_argument("--yolo_model", default='YOLO/model/af8.pt')
     parser.add_argument("--detector_fps", type=float, default=1.0,
                         help="Max detector runs per second (non-blocking throttle). 0 or negative disables throttling.")
     args, _ = parser.parse_known_args()
