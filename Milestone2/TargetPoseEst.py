@@ -27,6 +27,98 @@ TARGET_TYPES = ['orange', 'lemon', 'pear', 'tomato', 'capsicum', 'potato', 'pump
 ARENA_SIZE  = 2.7
 ARENA_BOUND = ARENA_SIZE / 2.0  # ±1.35 m
 
+
+def load_map(map_source):
+    """
+    Load a SLAM map either from a filepath or a pre-loaded dict.
+
+    Expected format (JSON/dict):
+      {
+        "taglist": [tag_id0, tag_id1, ...],
+        "map": [[x0, x1, ...], [y0, y1, ...]]
+      }
+
+    Returns: (taglist, positions) where positions is a list of (x, y) in the
+    same index order as taglist.
+    """
+    if map_source is None:
+        return None, None
+    if isinstance(map_source, str) and os.path.exists(map_source):
+        with open(map_source, 'r') as f:
+            data = json.load(f)
+    elif isinstance(map_source, dict):
+        data = map_source
+    else:
+        raise ValueError("map_source must be a filepath or a dict matching the SLAM map format")
+
+    taglist = data.get('taglist', [])
+    m = data.get('map', [])
+    if not isinstance(taglist, list) or not isinstance(m, list) or len(m) != 2:
+        raise ValueError("Invalid map format: expected 'taglist' and 'map' with shape [2, N]")
+    xs, ys = m[0], m[1]
+    if len(xs) != len(ys) or len(xs) != len(taglist):
+        raise ValueError("Invalid map lengths: |xs|, |ys|, and |taglist| must match")
+    positions = [(float(xs[i]), float(ys[i])) for i in range(len(taglist))]
+    return taglist, positions
+
+
+def plot_targets_and_markers(target_est, taglist, positions, out_path,
+                             marker_png_dir, fruit_diameter_m=0.08):
+    """
+    Plot estimated targets and SLAM markers in world coordinates.
+
+    - target_est: dict like {"class_idx": {"x": float, "y": float}, ...}
+    - taglist: list of tag ids
+    - positions: list of (x, y) matching taglist indices
+    - out_path: file to save the figure
+    - marker_png_dir: directory containing lm_{tag}.png and lm_unknown.png
+    - fruit_diameter_m: used to size marker icons to match fruit size
+    """
+    if taglist is None or positions is None:
+        return
+
+    fig, ax = plt.subplots(figsize=(6, 6))
+    ax.set_aspect('equal', adjustable='box')
+    ax.set_xlim(-ARENA_BOUND, ARENA_BOUND)
+    ax.set_ylim(-ARENA_BOUND, ARENA_BOUND)
+    ax.grid(True, which='both', linestyle='--', alpha=0.3)
+    ax.set_xlabel('x (m)')
+    ax.set_ylabel('y (m)')
+    ax.set_title('Targets and Markers (world frame)')
+
+    # Plot targets as circles with diameter matching fruit_diameter_m
+    fruit_radius = fruit_diameter_m / 2.0
+    for key, pose in (target_est or {}).items():
+        x, y = float(pose['x']), float(pose['y'])
+        circ = plt.Circle((x, y), fruit_radius, color='tab:red', alpha=0.6)
+        ax.add_patch(circ)
+        ax.text(x, y + fruit_radius + 0.02, key, ha='center', va='bottom', fontsize=8)
+
+    # Plot markers using PNG icons at the same extent size as fruit
+    for idx, tag in enumerate(taglist):
+        x, y = positions[idx]
+        png_path = os.path.join(marker_png_dir, f"lm_{tag}.png")
+        if not os.path.exists(png_path):
+            png_path = os.path.join(marker_png_dir, "lm_unknown.png")
+        try:
+            img = mpimg.imread(png_path)
+            half = fruit_radius
+            ax.imshow(img, extent=[x - half, x + half, y - half, y + half],
+                      origin='center', zorder=3)
+        except Exception:
+            # Fallback to a square marker if image fails to load
+            ax.plot(x, y, marker='s', color='tab:blue')
+        ax.text(x, y - fruit_radius - 0.02, f"LM {tag}", ha='center', va='top', fontsize=8)
+
+    # Arena boundary
+    ax.add_patch(plt.Rectangle((-ARENA_BOUND, -ARENA_BOUND), ARENA_SIZE, ARENA_SIZE,
+                               fill=False, linewidth=1.5, color='k', alpha=0.5))
+
+    os.makedirs(os.path.dirname(out_path), exist_ok=True)
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=150)
+    plt.close(fig)
+
 def estimate_pose(camera_matrix, obj_info, robot_pose):
     """
     function:
@@ -141,6 +233,13 @@ def merge_estimations(target_pose_dict, eps=0.15, min_samples=2):
 
 # main loop
 if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--map_file', type=str, default=None,
+                        help='Path to SLAM map JSON (default: lab_output/slam.txt if exists)')
+    parser.add_argument('--no_plot', action='store_true', help='Disable plotting of markers/targets')
+    args, _ = parser.parse_known_args()
+
     script_dir = os.path.dirname(os.path.abspath(__file__))     # get current script directory (TargetPoseEst.py)
 
     # read in camera matrix
@@ -190,6 +289,23 @@ if __name__ == "__main__":
     # save target pose estimations
     with open(f'{script_dir}/lab_output/targets.txt', 'w') as fo:
         json.dump(target_est, fo, indent=4)
+
+    # Optional: load a provided SLAM map and plot markers
+    if not args.no_plot:
+        taglist, positions = (None, None)
+        map_path = args.map_file
+        if map_path is None:
+            candidate = f'{script_dir}/lab_output/slam.txt'
+            map_path = candidate if os.path.exists(candidate) else None
+        try:
+            if map_path is not None:
+                taglist, positions = load_map(map_path)
+                out_plot = f'{script_dir}/lab_output/targets_map.png'
+                marker_png_dir = f'{script_dir}/pics/8bit'
+                plot_targets_and_markers(target_est, taglist, positions, out_plot, marker_png_dir)
+                print(f'Map plot saved to {out_plot}')
+        except Exception as e:
+            print(f'Warning: map plotting skipped: {e}')
 
     print('Estimations saved!')
 
