@@ -114,7 +114,7 @@ def drive_to_point(waypoint, robot_pose):
 
     
     # turn towards the waypoint
-    dtheta = waypoint[2] - np.arctan2(robot_pose[1],robot_pose[0])
+    dtheta = np.arctan2(waypoint[1]-robot_pose[1],waypoint[0]-robot_pose[0]) - robot_pose[2]
 
     turn_time = (baseline * dtheta)/(2 * scale * wheel_vel)
     print("Turning for {:.2f} seconds".format(turn_time))
