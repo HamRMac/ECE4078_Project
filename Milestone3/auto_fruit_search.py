@@ -1,4 +1,5 @@
-# M4 - Autonomous fruit searching
+# M3 - Autonomous fruit searching
+# Level 1: Semi-auto with waypoints
 
 # basic python packages
 import sys, os
@@ -8,16 +9,16 @@ import json
 import argparse
 import time
 
-# import SLAM components
-# sys.path.insert(0, "{}/slam".format(os.getcwd()))
-# from slam.ekf import EKF
-# from slam.robot import Robot
-# import slam.aruco_detector as aruco
-
 # import utility functions
-sys.path.insert(0, "util")
-from pibot import PenguinPi
-import measure as measure
+sys.path.insert(0, "{}/util".format(os.getcwd()))
+from util.pibot import PenguinPi
+import util.measure as measure
+
+# Import SLAM components
+sys.path.insert(0, "{}/slam".format(os.getcwd()))
+from slam.ekf import EKF
+from slam.robot import Robot
+import slam.aruco_detector as aruco
 
 
 def read_true_map(fname):
@@ -131,16 +132,44 @@ def drive_to_point(waypoint, robot_pose):
     print("Arrived at [{}, {}]".format(waypoint[0], waypoint[1]))
 
 
-def get_robot_pose():
+def get_robot_pose(penguin_pi, aruco_detector, ekf):
     ####################################################
     # TODO: replace with your codes to estimate the pose of the robot
     # We STRONGLY RECOMMEND you to use your SLAM code from M2 here
 
     # update the robot pose [x,y,theta]
     robot_pose = [0.0,0.0,0.0] # replace with your calculation
+
+    # Get the image
+    img = penguin_pi.get_image()
+    aruco_detector.detect_marker_positions(img)
+
+    # Reset the EKF
+    ekf.reset()
+    # Attempt to predict the location
+    ekf.predict(measure.Drive(0, 0, 0)) # << This only works because the robot has not yet moved
+    # Get any visable arucos and then update EKF
+    lms, _ = aruco_detector.detect_marker_positions(img)
+    ekf.update(lms)
+
     ####################################################
 
     return robot_pose
+
+# wheel and camera calibration for SLAM
+def init_ekf(datadir, ip):
+    fileK = "{}intrinsic.txt".format(datadir)
+    camera_matrix = np.loadtxt(fileK, delimiter=',')
+    fileD = "{}distCoeffs.txt".format(datadir)
+    dist_coeffs = np.loadtxt(fileD, delimiter=',')
+    fileS = "{}scale.txt".format(datadir)
+    scale = np.loadtxt(fileS, delimiter=',')
+    if ip == 'localhost':
+        scale /= 2
+    fileB = "{}baseline.txt".format(datadir)
+    baseline = np.loadtxt(fileB, delimiter=',')
+    robot = Robot(baseline, scale, camera_matrix, dist_coeffs)
+    return EKF(robot)
 
 # main loop
 if __name__ == "__main__":
@@ -157,8 +186,15 @@ if __name__ == "__main__":
     search_list = read_search_list()
     print_target_fruits_pos(search_list, fruits_list, fruits_true_pos)
 
+    # Set the default waypoints
     waypoint = [0.0,0.0]
     robot_pose = [0.0,0.0,0.0]
+
+    # Initialise the EKF functions
+    ekf = init_ekf(args.calib_dir, args.ip)
+    is_success = ekf.recover_from_pause(lms)
+    aruco_det = aruco.aruco_detector(ekf.robot, marker_length=0.07)
+    aruco_det.detect_marker_positions(img)
 
     # The following is only a skeleton code for semi-auto navigation
     while True:
