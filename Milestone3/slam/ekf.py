@@ -44,7 +44,71 @@ class EKF:
         f_ = f'./pics/8bit/lm_unknown.png'
         self.lm_pics.append(pygame.image.load(f_))
         self.pibot_pic = pygame.image.load(f'./pics/8bit/pibot_top.png')
-        
+
+    ##########################################
+    # Seeding known landmarks (for known maps)
+    ##########################################
+    def seed_landmarks(self, tag_positions: dict, initial_covariance: float = 1e-10):
+        """Pre-seed EKF with known ArUco landmark world positions.
+
+        Parameters
+        - tag_positions: dict[int -> tuple(float,float)] mapping tag id to (x, y)
+        - initial_covariance: variance to set for each landmark coordinate. Use a
+          very small number (e.g., 1e-10 .. 1e-8) to indicate strong certainty.
+
+        Notes
+        - This switches EKF into a localisation-only mode for those markers.
+        - Landmark covariance is set on the diagonal; cross-covariances remain zero.
+        - Any existing landmarks are cleared and replaced by this seed.
+        """
+        # Reset landmark containers
+        self.markers = np.zeros((2, 0))
+        self.taglist = []
+
+        # Start from current robot covariance and expand for landmarks
+        P_robot = self.P[0:3, 0:3] if self.P.shape[0] >= 3 else np.zeros((3, 3))
+        P = P_robot
+
+        for tag in sorted(tag_positions.keys()):
+            xy = np.array(tag_positions[tag], dtype=float).reshape(2, 1)
+            self.taglist.append(int(tag))
+            self.markers = np.concatenate((self.markers, xy), axis=1)
+            # Expand P by 2 dims and set small variance for the landmark
+            P = np.concatenate((P, np.zeros((P.shape[0], 2))), axis=1)
+            P = np.concatenate((P, np.zeros((2, P.shape[1]))), axis=0)
+            P[-2, -2] = float(initial_covariance)
+            P[-1, -1] = float(initial_covariance)
+
+        self.P = 0.5 * (P + P.T)  # enforce symmetry
+
+    def seed_from_map_file(self, fname: str, initial_covariance: float = 1e-10, only_aruco: bool = True):
+        """Load marker positions from a true map JSON and seed landmarks.
+
+        Accepts maps like M3_prac_map_min.txt (markers only) or full/part maps.
+        - only_aruco=True: ignore all non-'aruco' entries.
+        """
+        import json
+        tag_positions = {}
+        with open(fname, 'r') as fd:
+            gt = json.load(fd)
+            for key, v in gt.items():
+                if key.startswith('aruco'):
+                    # Extract numeric id between 'aruco' and first '_'
+                    try:
+                        rest = key[5:]
+                        num_str = rest.split('_')[0]
+                        tag_id = int(num_str)
+                    except Exception:
+                        continue
+                    tag_positions[tag_id] = (float(v['x']), float(v['y']))
+                elif not only_aruco:
+                    # Skip fruits/vegs when only_aruco=True
+                    pass
+        if tag_positions:
+            self.seed_landmarks(tag_positions, initial_covariance)
+        else:
+            print('[EKF] seed_from_map_file: No aruco tags found to seed')
+
     def reset(self):
         self.robot.state = np.zeros((3, 1))
         self.markers = np.zeros((2,0))
@@ -123,14 +187,19 @@ class EKF:
         if not measurements:
             return
 
-        # Construct measurement index list
-        tags = [lm.tag for lm in measurements]
+        # Filter out measurements for unknown tags (not present in the EKF state)
+        known_meas = [lm for lm in measurements if lm.tag in self.taglist]
+        if not known_meas:
+            return
+
+        # Construct measurement index list for known measurements only
+        tags = [lm.tag for lm in known_meas]
         idx_list = [self.taglist.index(tag) for tag in tags]
 
         # Stack measurements and set covariance
-        z = np.concatenate([lm.position.reshape(-1,1) for lm in measurements], axis=0)
-        Rm = np.zeros((2*len(measurements), 2*len(measurements)))
-        for i, lm in enumerate(measurements):
+        z = np.concatenate([lm.position.reshape(-1,1) for lm in known_meas], axis=0)
+        Rm = np.zeros((2*len(known_meas), 2*len(known_meas)))
+        for i, lm in enumerate(known_meas):
             Rm[2*i:2*i+2, 2*i:2*i+2] = lm.covariance
 
         # Compute own measurements
@@ -422,4 +491,3 @@ class EKF:
         else:
             angle = 0
         return (axes_len[0], axes_len[1]), angle
-

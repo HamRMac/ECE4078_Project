@@ -59,13 +59,13 @@ def read_true_map(fname):
         return fruit_list, fruit_true_pos, aruco_true_pos
 
 
-def read_search_list():
+def read_search_list(list_path):
     """Read the search order of the target fruits
 
     @return: search order of the target fruits
     """
     search_list = []
-    with open('search_list.txt', 'r') as fd:
+    with open(list_path, 'r') as fd:
         fruits = fd.readlines()
 
         for fruit in fruits:
@@ -85,12 +85,18 @@ def print_target_fruits_pos(search_list, fruit_list, fruit_true_pos):
     print("Search order:")
     n_fruit = 1
     for fruit in search_list:
-        for i in range(len(fruit_list)): # there are 5 targets amongst 10 objects
+        # Only print coordinates if present in provided map
+        for i in range(len(fruit_list)):
             if fruit == fruit_list[i]:
-                print('{}) {} at [{}, {}]'.format(n_fruit,
-                                                  fruit,
-                                                  np.round(fruit_true_pos[i][0], 1),
-                                                  np.round(fruit_true_pos[i][1], 1)))
+                try:
+                    print('{}) {} at [{}, {}]'.format(
+                        n_fruit,
+                        fruit,
+                        np.round(fruit_true_pos[i][0], 1),
+                        np.round(fruit_true_pos[i][1], 1)))
+                except Exception:
+                    # In minimal map there may be no fruit positions
+                    print('{}) {}'.format(n_fruit, fruit))
         n_fruit += 1
 
 
@@ -100,36 +106,71 @@ def print_target_fruits_pos(search_list, fruit_list, fruit_true_pos):
 # fully automatic navigation:
 # try developing a path-finding algorithm that produces the waypoints automatically
 def drive_to_point(waypoint, robot_pose):
-    # imports camera / wheel calibration parameters 
+    # imports camera / wheel calibration parameters
     fileS = "calibration/param/scale.txt"
     scale = np.loadtxt(fileS, delimiter=',')
     fileB = "calibration/param/baseline.txt"
     baseline = np.loadtxt(fileB, delimiter=',')
-    
-    ####################################################
-    # TODO: replace with your codes to make the robot drive to the waypoint
-    # One simple strategy is to first turn on the spot facing the waypoint,
-    # then drive straight to the way point
 
-    wheel_vel = 30 # tick
+    # Control parameters
+    ctrl_rate_hz = 10.0
+    dt_loop = 1.0 / ctrl_rate_hz
+    pos_tol = 0.08  # m
+    ang_align_tol = 0.2  # rad (~11 deg)
+    max_forward_tick = 40
+    min_forward_tick = 20
+    max_turn_tick = 30
+    min_turn_tick = 10
+    max_duration = 20.0  # seconds safety timeout
 
-    
-    # turn towards the waypoint
-    dtheta = np.arctan2(waypoint[1]-robot_pose[1],waypoint[0]-robot_pose[0]) - robot_pose[2]
+    def wrap_pi(a):
+        return (a + np.pi) % (2*np.pi) - np.pi
 
-    turn_time = (baseline * dtheta)/(2 * scale * wheel_vel)
-    print("Turning for {:.2f} seconds".format(turn_time))
-    ppi.set_velocity([0, 1], turning_tick=wheel_vel, time=turn_time)
-    
-    # after turning, drive straight to the waypoint
-    dx = np.sqrt((waypoint[0]-robot_pose[0])**2 + (waypoint[1]-robot_pose[1])**2)
+    t0 = time.time()
+    arrived = False
 
-    drive_time = dx/(scale * wheel_vel)
-    print("Driving for {:.2f} seconds".format(drive_time))
-    ppi.set_velocity([1, 0], tick=wheel_vel, time=drive_time)
-    ####################################################
+    while True:
+        # Safety timeout
+        if time.time() - t0 > max_duration:
+            print("[drive_to_point] Timeout; stopping.")
+            break
 
-    print("Arrived at [{}, {}]".format(waypoint[0], waypoint[1]))
+        # Refresh pose from EKF
+        pose = get_robot_pose(ppi, aruco_det, ekf)
+        dx = float(waypoint[0] - pose[0])
+        dy = float(waypoint[1] - pose[1])
+        dist = float(np.hypot(dx, dy))
+        if dist <= pos_tol:
+            arrived = True
+            break
+
+        desired_heading = float(np.arctan2(dy, dx))
+        heading_err = wrap_pi(desired_heading - float(pose[2]))
+
+        # Phase 1: rotate in place until aligned
+        if abs(heading_err) > ang_align_tol and dist > pos_tol:
+            turn_dir = 1 if heading_err > 0 else -1
+            turn_mag = min(1.0, abs(heading_err) / 0.8)  # scale with error up to ~45 deg
+            turn_tick = int(min(max_turn_tick, max(min_turn_tick, turn_mag * max_turn_tick)))
+            ppi.set_velocity([0, turn_dir], turning_tick=turn_tick, time=0)
+        else:
+            # Phase 2: drive straight towards waypoint
+            fwd_mag = min(1.0, dist / 0.5)
+            fwd_tick = int(min(max_forward_tick, max(min_forward_tick, fwd_mag * max_forward_tick)))
+            ppi.set_velocity([1, 0], tick=fwd_tick, time=0)
+
+        time.sleep(dt_loop)
+
+    # Stop safely
+    ppi.set_velocity([0, 0])
+    if arrived:
+        print("Arrived at [{:.2f}, {:.2f}]".format(waypoint[0], waypoint[1]))
+    else:
+        # Report final distance if available
+        try:
+            print("Stopped before arrival at [{:.2f}, {:.2f}] (dist {:.2f} m)".format(waypoint[0], waypoint[1], dist))
+        except Exception:
+            print("Stopped before arrival at [{:.2f}, {:.2f}]".format(waypoint[0], waypoint[1]))
 
 
 def get_robot_pose(penguin_pi, aruco_detector, ekf):
@@ -137,20 +178,42 @@ def get_robot_pose(penguin_pi, aruco_detector, ekf):
     # TODO: replace with your codes to estimate the pose of the robot
     # We STRONGLY RECOMMEND you to use your SLAM code from M2 here
 
-    # update the robot pose [x,y,theta]
-    robot_pose = [0.0,0.0,0.0] # replace with your calculation
+    # Dummy robot_pose
+    robot_pose = [0.0,0.0,0.0] # will be replaced by EKF state below
 
     # Get the image
     img = penguin_pi.get_image()
-    aruco_detector.detect_marker_positions(img)
+    _ = aruco_detector.detect_marker_positions(img)
 
     # Reset the EKF
-    ekf.reset()
-    # Attempt to predict the location
-    ekf.predict(measure.Drive(0, 0, 0)) # << This only works because the robot has not yet moved
-    # Get any visable arucos and then update EKF
+    # Attempt to predict the location using last drive command and dt
+    now = time.time()
+    if not hasattr(get_robot_pose, "_last_t"):
+        get_robot_pose._last_t = now
+    dt = max(1e-3, now - get_robot_pose._last_t)
+    get_robot_pose._last_t = now
+
+    # Use last commanded wheel velocities from PenguinPi
+    try:
+        l_vel, r_vel = penguin_pi.wheel_vel
+    except Exception:
+        l_vel, r_vel = 0.0, 0.0
+    # Match M2 convention: invert right wheel for physical robot
+    if getattr(penguin_pi, 'ip', '') == 'localhost':
+        drive_meas = measure.Drive(l_vel, r_vel, dt)
+    else:
+        drive_meas = measure.Drive(l_vel, -r_vel, dt)
+    ekf.predict(drive_meas)
+    # Get any visible arucos and then update EKF
     lms, _ = aruco_detector.detect_marker_positions(img)
     ekf.update(lms)
+
+    # Read pose from EKF robot state
+    try:
+        rs = ekf.robot.state.flatten()
+        robot_pose = [float(rs[0]), float(rs[1]), float(rs[2])]
+    except Exception:
+        robot_pose = [0.0, 0.0, 0.0]
 
     ####################################################
 
@@ -174,7 +237,9 @@ def init_ekf(datadir, ip):
 # main loop
 if __name__ == "__main__":
     parser = argparse.ArgumentParser("Fruit searching")
-    parser.add_argument("--map", type=str, default='M4_true_map_full.txt') # change to 'M4_true_map_part.txt' for lv2&3
+    parser.add_argument("--map", type=str, default='M3_prac_map_min.txt', help='Path to true map file (full/part/min)')
+    parser.add_argument("--shopping_list", type=str, default='M3_prac_shopping_list.txt', help='Path to shopping list file')
+    parser.add_argument("--calib_dir", type=str, default='calibration/param/', help='Directory containing calibration files')
     parser.add_argument("--ip", metavar='', type=str, default='192.168.50.1')
     parser.add_argument("--port", metavar='', type=int, default=8080)
     args, _ = parser.parse_known_args()
@@ -183,8 +248,12 @@ if __name__ == "__main__":
 
     # read in the true map
     fruits_list, fruits_true_pos, aruco_true_pos = read_true_map(args.map)
-    search_list = read_search_list()
-    print_target_fruits_pos(search_list, fruits_list, fruits_true_pos)
+    # read shopping list
+    search_list = read_search_list(args.shopping_list)
+    try:
+        print_target_fruits_pos(search_list, fruits_list, fruits_true_pos)
+    except Exception:
+        print("Loaded shopping list (positions not available in minimal map).")
 
     # Set the default waypoints
     waypoint = [0.0,0.0]
@@ -192,9 +261,14 @@ if __name__ == "__main__":
 
     # Initialise the EKF functions
     ekf = init_ekf(args.calib_dir, args.ip)
-    is_success = ekf.recover_from_pause(lms)
+    # Pre-seed EKF with known ArUco positions from the provided map (Level 4/minimal map)
+    try:
+        ekf.seed_from_map_file(args.map, initial_covariance=1e-10, only_aruco=True)
+        print("[EKF] Seeded known ArUco landmarks from map:", args.map)
+    except Exception as e:
+        print("[EKF] Seeding from map failed:", e)
+    # Create ArUco detector
     aruco_det = aruco.aruco_detector(ekf.robot, marker_length=0.07)
-    aruco_det.detect_marker_positions(img)
 
     # The following is only a skeleton code for semi-auto navigation
     while True:
@@ -215,7 +289,7 @@ if __name__ == "__main__":
             continue
 
         # estimate the robot's pose
-        robot_pose = get_robot_pose()
+        robot_pose = get_robot_pose(ppi, aruco_det, ekf)
 
         # robot drives to the waypoint
         waypoint = [x,y]
