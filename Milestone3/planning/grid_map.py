@@ -53,14 +53,19 @@ class GridMap:
     def world_to_grid(self, x: float, y: float) -> Tuple[int, int]:
         """
         Map world metres to grid indices (row, col), clamped to image bounds.
-        Uses floor so a point maps to the cell that contains it.
+
+        Coordinate convention (updated):
+        - Positive X to the right (increasing column index)
+        - Positive Y at the TOP of the map (decreasing row index)
+
+        Thus, row index is computed from the TOP world Y boundary (by1).
         """
-        assert self.origin_wm is not None and self.size is not None, "Grid not built yet."
-        ox, oy = self.origin_wm
+        assert self.origin_wm is not None and self.size is not None and self.bounds_wm is not None, "Grid not built yet."
+        bx0, by0, bx1, by1 = self.bounds_wm
         H, W = self.size
 
-        c = int(math.floor((x - ox) / self.res))
-        r = int(math.floor((y - oy) / self.res))
+        c = int(math.floor((x - bx0) / self.res))
+        r = int(math.floor((by1 - y) / self.res))
 
         # Clamp to valid index range
         c = 0 if c < 0 else (W - 1 if c >= W else c)
@@ -70,11 +75,13 @@ class GridMap:
     def grid_to_world(self, r: int, c: int) -> Tuple[float, float]:
         """
         Map grid indices (row, col) to world metres at the centre of the cell.
+
+        Uses top-origin for Y: y = by1 - (r+0.5)*res
         """
-        assert self.origin_wm is not None and self.size is not None, "Grid not built yet."
-        ox, oy = self.origin_wm
-        x = ox + (c + 0.5) * self.res
-        y = oy + (r + 0.5) * self.res
+        assert self.origin_wm is not None and self.size is not None and self.bounds_wm is not None, "Grid not built yet."
+        bx0, by0, bx1, by1 = self.bounds_wm
+        x = bx0 + (c + 0.5) * self.res
+        y = by1 - (r + 0.5) * self.res
         return x, y
 
     # ---------------- Build ----------------
@@ -167,4 +174,31 @@ class GridMap:
             1,
             cv2.LINE_AA,
         )
+        """
+        # Draw axis tick marks (every 0.2 m by default)
+        try:
+            bx0, by0, bx1, by1 = self.bounds_wm  # type: ignore
+            tick = 0.2
+            # X ticks along bottom edge
+            x = math.ceil(bx0 / tick) * tick
+            while x <= bx1 + 1e-9:
+                r, c = self.world_to_grid(x, by0)
+                px = int((c + 0.5) * 1)  # cell center in grid units
+                # convert to pixels in rendered image
+                px = int(c * 1)  # left edge
+                # Tick on bottom
+                cv2.line(vis, (int(c), vis.shape[0] - 6), (int(c), vis.shape[0] - 1), (180, 180, 180), 1)
+                cv2.putText(vis, f"{x:.1f}", (int(c) + 2, vis.shape[0] - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.3, (120, 120, 120), 1, cv2.LINE_AA)
+                x += tick
+            # Y ticks along left edge (positive Y at top)
+            y = math.floor(by1 / tick) * tick
+            while y >= by0 - 1e-9:
+                r, c = self.world_to_grid(bx0, y)
+                py = int(r)
+                cv2.line(vis, (0, py), (6, py), (180, 180, 180), 1)
+                cv2.putText(vis, f"{y:.1f}", (8, py + 10), cv2.FONT_HERSHEY_SIMPLEX, 0.3, (120, 120, 120), 1, cv2.LINE_AA)
+                y -= tick
+        except Exception:
+            pass
+        """
         return vis
