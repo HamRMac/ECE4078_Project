@@ -44,6 +44,7 @@ def read_true_map(fname):
         fruit_list = []
         fruit_true_pos = []
         aruco_true_pos = np.empty([10, 2])
+        aruco_true_pos_id = np.empty([10, 3])
 
         # remove unique id of targets of the same type
         for key in gt_dict:
@@ -54,10 +55,16 @@ def read_true_map(fname):
                 if key.startswith('aruco10'):
                     aruco_true_pos[9][0] = x
                     aruco_true_pos[9][1] = y
+                    aruco_true_pos_id[9][0] = x
+                    aruco_true_pos_id[9][1] = y
+                    aruco_true_pos_id[9][2] = 10
                 else:
                     marker_id = int(key[5]) - 1
                     aruco_true_pos[marker_id][0] = x
                     aruco_true_pos[marker_id][1] = y
+                    aruco_true_pos_id[marker_id][0] = x
+                    aruco_true_pos_id[marker_id][1] = y
+                    aruco_true_pos_id[marker_id][2] = int(marker_id + 1)
             else:
                 fruit_list.append(key[:-2])
                 if len(fruit_true_pos) == 0:
@@ -65,7 +72,7 @@ def read_true_map(fname):
                 else:
                     fruit_true_pos = np.append(fruit_true_pos, [[x, y]], axis=0)
 
-        return fruit_list, fruit_true_pos, aruco_true_pos
+        return fruit_list, fruit_true_pos, aruco_true_pos, aruco_true_pos_id
 
 
 def read_search_list(list_path):
@@ -244,7 +251,7 @@ if __name__ == "__main__":
 
     # read in the true map
     log.info("Loading map file: %s", args.map)
-    fruits_list, fruits_true_pos, aruco_true_pos = read_true_map(args.map)
+    fruits_list, fruits_true_pos, aruco_true_pos, aruco_true_pos_id = read_true_map(args.map)
     # read shopping list
     search_list = read_search_list(args.shopping_list)
     try:
@@ -290,6 +297,7 @@ if __name__ == "__main__":
                       fps=15,
                       controller_kind=args.controller,
                       dry_run=(args.no_run or args.ip == 'localhost'),
+                      ARUCO_locations=aruco_true_pos_id,
                       ppi=ppi)
     # Start the viewer and run until closed
     log.info("Launching OGViewer GUI")

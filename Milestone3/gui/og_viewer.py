@@ -45,6 +45,7 @@ class OGViewer:
         fps: int = 15,
         controller_kind: str = "ttg",
         dry_run: bool = False,
+        ARUCO_locations: np.ndarray = None,
         ppi=None,
     ) -> None:
         """
@@ -64,6 +65,8 @@ class OGViewer:
         self.ctrl = ControllerManager(controller_kind)
         self.dry_run = bool(dry_run)
         self.ppi = ppi
+
+        self.ARUCO_locations = ARUCO_locations
 
         # Interactive state
         self.goal_xy: Optional[Tuple[float, float]] = None
@@ -108,6 +111,53 @@ class OGViewer:
             pts = np.array([[int(c * self.scale), int(r * self.scale)] for (r, c) in self.last_plan.path_grid], dtype=np.int32)
             if len(pts) >= 2:
                 cv2.polylines(vis_bgr, [pts], isClosed=False, color=(255, 0, 0), thickness=2)
+
+        # Overlay ARUCO marker sprites at their OG positions using self.ARUCO_locations (Nx2 array)
+        try:
+            if self.ARUCO_locations is not None and hasattr(self.ARUCO_locations, 'shape') and self.ARUCO_locations.shape[1] == 3:
+                #log.debug(f"Loading {self.ARUCO_locations.shape[0]} ARUCO sprites")
+                for tag in self.ARUCO_locations:
+                    tag_id = int(tag[2])
+                    # Index mapping: index 0 -> aruco1, 9 -> aruco10
+                    x, y = float(tag[0]), float(tag[1])
+                    r, c = self.grid.world_to_grid(x, y)
+                    px, py = int(c * self.scale), int(r * self.scale)
+                    # Load correct sprite for this tag id
+                    icon_path = f'pics/8bit/lm_{tag_id}.png'
+                    icon = cv2.imread(icon_path, cv2.IMREAD_UNCHANGED)
+                    if icon is None:
+                        # Fallback placeholder box with id label
+                        sz = 14
+                        tl = (px - sz // 2, py - sz // 2)
+                        br = (px + sz // 2, py + sz // 2)
+                        cv2.rectangle(vis_bgr, tl, br, (0, 0, 255), 2)
+                        cv2.putText(vis_bgr, f"{tag_id}", (tl[0], tl[1] - 4), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 255), 1, cv2.LINE_AA)
+                        continue
+                    # Resize sprite to a sensible size
+                    target_sz = 18
+                    icon_rsz = cv2.resize(icon, (target_sz, target_sz), interpolation=cv2.INTER_AREA)
+                    iw, ih = icon_rsz.shape[1], icon_rsz.shape[0]
+                    x0 = px - iw // 2
+                    y0 = py - ih // 2
+                    x1 = x0 + iw
+                    y1 = y0 + ih
+                    # Clip to bounds
+                    H, W = vis_bgr.shape[:2]
+                    x0c, y0c = max(0, x0), max(0, y0)
+                    x1c, y1c = min(W, x1), min(H, y1)
+                    if x1c <= x0c or y1c <= y0c:
+                        continue
+                    roi = vis_bgr[y0c:y1c, x0c:x1c]
+                    ix0, iy0 = x0c - x0, y0c - y0
+                    ix1, iy1 = ix0 + (x1c - x0c), iy0 + (y1c - y0c)
+                    icon_crop = icon_rsz[iy0:iy1, ix0:ix1]
+                    if icon_crop.shape[2] == 4:
+                        alpha = icon_crop[:, :, 3:] / 255.0
+                        roi[:] = (1 - alpha) * roi + alpha * icon_crop[:, :, :3]
+                    else:
+                        roi[:] = icon_crop
+        except Exception as e:
+            log.debug("ARUCO sprite overlay failed: %s", e)
 
         # Convert BGR numpy image to PyGame surface and blit
         vis_rgb = cv2.cvtColor(vis_bgr, cv2.COLOR_BGR2RGB)
