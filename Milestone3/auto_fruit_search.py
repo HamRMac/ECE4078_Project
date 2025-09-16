@@ -20,6 +20,11 @@ from slam.ekf import EKF
 from slam.robot import Robot
 import slam.aruco_detector as aruco
 
+# Import navigation components
+from navigation.controller import ControllerManager
+from planning.astar import AStarPlanner
+from gui.og_viewer import OGViewer
+from planning.grid_map import GridMap
 
 def read_true_map(fname):
     """Read the ground truth map and output the pose of the ArUco markers and 5 target fruits&vegs to search for
@@ -105,7 +110,7 @@ def print_target_fruits_pos(search_list, fruit_list, fruit_true_pos):
 # note that this function requires your camera and wheel calibration parameters from M2, and the "util" folder from M1
 # fully automatic navigation:
 # try developing a path-finding algorithm that produces the waypoints automatically
-def drive_to_point(waypoint, robot_pose):
+def drive_to_point(waypoint, robot_pose, controller_kind: str = "ttg"):
     # imports camera / wheel calibration parameters
     fileS = "calibration/param/scale.txt"
     scale = np.loadtxt(fileS, delimiter=',')
@@ -115,16 +120,10 @@ def drive_to_point(waypoint, robot_pose):
     # Control parameters
     ctrl_rate_hz = 10.0
     dt_loop = 1.0 / ctrl_rate_hz
-    pos_tol = 0.08  # m
-    ang_align_tol = 0.2  # rad (~11 deg)
-    max_forward_tick = 40
-    min_forward_tick = 20
-    max_turn_tick = 30
-    min_turn_tick = 10
     max_duration = 20.0  # seconds safety timeout
 
-    def wrap_pi(a):
-        return (a + np.pi) % (2*np.pi) - np.pi
+    # Select controller
+    ctrl_mgr = ControllerManager(controller_kind)
 
     t0 = time.time()
     arrived = False
@@ -137,27 +136,11 @@ def drive_to_point(waypoint, robot_pose):
 
         # Refresh pose from EKF
         pose = get_robot_pose(ppi, aruco_det, ekf)
-        dx = float(waypoint[0] - pose[0])
-        dy = float(waypoint[1] - pose[1])
-        dist = float(np.hypot(dx, dy))
-        if dist <= pos_tol:
+        fwd_cmd, turn_cmd, fwd_tick, turn_tick, done = ctrl_mgr.compute(pose, waypoint)
+        if done:
             arrived = True
             break
-
-        desired_heading = float(np.arctan2(dy, dx))
-        heading_err = wrap_pi(desired_heading - float(pose[2]))
-
-        # Phase 1: rotate in place until aligned
-        if abs(heading_err) > ang_align_tol and dist > pos_tol:
-            turn_dir = 1 if heading_err > 0 else -1
-            turn_mag = min(1.0, abs(heading_err) / 0.8)  # scale with error up to ~45 deg
-            turn_tick = int(min(max_turn_tick, max(min_turn_tick, turn_mag * max_turn_tick)))
-            ppi.set_velocity([0, turn_dir], turning_tick=turn_tick, time=0)
-        else:
-            # Phase 2: drive straight towards waypoint
-            fwd_mag = min(1.0, dist / 0.5)
-            fwd_tick = int(min(max_forward_tick, max(min_forward_tick, fwd_mag * max_forward_tick)))
-            ppi.set_velocity([1, 0], tick=fwd_tick, time=0)
+        ppi.set_velocity([fwd_cmd, turn_cmd], tick=fwd_tick, turning_tick=turn_tick, time=0)
 
         time.sleep(dt_loop)
 
@@ -166,11 +149,7 @@ def drive_to_point(waypoint, robot_pose):
     if arrived:
         print("Arrived at [{:.2f}, {:.2f}]".format(waypoint[0], waypoint[1]))
     else:
-        # Report final distance if available
-        try:
-            print("Stopped before arrival at [{:.2f}, {:.2f}] (dist {:.2f} m)".format(waypoint[0], waypoint[1], dist))
-        except Exception:
-            print("Stopped before arrival at [{:.2f}, {:.2f}]".format(waypoint[0], waypoint[1]))
+        print("Stopped before arrival at [{:.2f}, {:.2f}]".format(waypoint[0], waypoint[1]))
 
 
 def get_robot_pose(penguin_pi, aruco_detector, ekf):
@@ -242,6 +221,8 @@ if __name__ == "__main__":
     parser.add_argument("--calib_dir", type=str, default='calibration/param/', help='Directory containing calibration files')
     parser.add_argument("--ip", metavar='', type=str, default='192.168.50.1')
     parser.add_argument("--port", metavar='', type=int, default=8080)
+    parser.add_argument("--controller", type=str, default='ttg', choices=['ttg','ppc','rhp'], help='Controller type: turn-then-go (ttg), pure pursuit (ppc), or receding horizon (rhp)')
+    parser.add_argument("--no_run", action='store_true', help='Only load map, world model, and occupancy grid; do not start autonomy')
     args, _ = parser.parse_known_args()
 
     ppi = PenguinPi(args.ip,args.port)
@@ -255,9 +236,16 @@ if __name__ == "__main__":
     except Exception:
         print("Loaded shopping list (positions not available in minimal map).")
 
-    # Set the default waypoints
-    waypoint = [0.0,0.0]
-    robot_pose = [0.0,0.0,0.0]
+    # Build world model and occupancy grid
+    try:
+        # Fixed arena 2.4 x 2.4 m centered at origin => [-1.4, -1.4] .. [1.4, 1.4]
+        grid = GridMap(res=0.02, margin=0.0, robot_radius=0.09,
+                       inflation_margin=0.05, boundary_margin=0.01,
+                       arena_bounds_wm=(-1.4, -1.4, 1.4, 1.4))
+        grid.build_from_aruco(aruco_true_pos)
+        print("[WM] Occupancy grid built:", grid.size, "cells @", grid.res, "m")
+    except Exception as e:
+        print("[WM] Building occupancy grid failed:", e)
 
     # Initialise the EKF functions
     ekf = init_ekf(args.calib_dir, args.ip)
@@ -270,34 +258,19 @@ if __name__ == "__main__":
     # Create ArUco detector
     aruco_det = aruco.aruco_detector(ekf.robot, marker_length=0.07)
 
-    # The following is only a skeleton code for semi-auto navigation
-    while True:
-        # enter the waypoints
-        # instead of manually enter waypoints, you can give coordinates by clicking on a map, see camera_calibration.py from M2
-        x,y = 0.0,0.0
-        x = input("X coordinate of the waypoint: ")
-        try:
-            x = float(x)
-        except ValueError:
-            print("Please enter a number.")
-            continue
-        y = input("Y coordinate of the waypoint: ")
-        try:
-            y = float(y)
-        except ValueError:
-            print("Please enter a number.")
-            continue
+    # Interactive OG viewer (PyGame) always enabled. Closing window ends program.
+    def _get_pose():
+        # In dry-run mode (no_run or localhost), keep pose at origin; otherwise query EKF
+        if args.no_run or args.ip == 'localhost':
+            return [0.0, 0.0, 0.0]
+        return get_robot_pose(ppi, aruco_det, ekf)
 
-        # estimate the robot's pose
-        robot_pose = get_robot_pose(ppi, aruco_det, ekf)
+    viewer = OGViewer(grid=grid, planner=AStarPlanner(), get_pose_fn=_get_pose, window_scale=4, fps=15)
+    viewer.run()
+    sys.exit(0)
 
-        # robot drives to the waypoint
-        waypoint = [x,y]
-        drive_to_point(waypoint,robot_pose)
-        print("Finished driving to waypoint: {}; New robot pose: {}".format(waypoint,robot_pose))
+    # Set the default waypoints
+    waypoint = [0.0,0.0]
+    robot_pose = [0.0,0.0,0.0]
 
-        # exit
-        ppi.set_velocity([0, 0])
-        uInput = input("Add a new waypoint? [Y/N]")
-        if uInput == 'N':
-            break
+    # Legacy waypoint loop retained below (unreachable due to GUI exit).

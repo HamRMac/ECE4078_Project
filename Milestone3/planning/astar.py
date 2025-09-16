@@ -1,0 +1,229 @@
+from __future__ import annotations
+
+import heapq
+import math
+import time
+from dataclasses import dataclass
+from typing import Dict, List, Optional, Tuple
+
+import numpy as np
+
+from .grid_map import GridMap
+
+Coord = Tuple[int, int]   # (row, col)
+Point = Tuple[float, float]  # (x, y)
+
+
+@dataclass
+class PlanResult:
+    path_grid: List[Coord]
+    path_world: List[Point]
+    pruned_world: List[Point]
+    cost: float
+    planned_at: float
+
+
+class AStarPlanner:
+    """A* planner over GridMap with 8-connectivity and Euclidean heuristic.
+
+    - Occupied if grid value > occ_th (treat any value > occ_th as blocked).
+    - Returns both raw grid path and pruned world waypoints (line-of-sight pruning).
+    """
+
+    def __init__(self, occupancy_threshold: int = 0):
+        self.occ_th = int(occupancy_threshold)
+
+    # --------------- Core A* ---------------
+    @staticmethod
+    def _neighbors(H: int, W: int, p: Coord) -> List[Tuple[Coord, float]]:
+        r, c = p
+        nbrs: List[Tuple[Coord, float]] = []
+        for dr in (-1, 0, 1):
+            for dc in (-1, 0, 1):
+                if dr == 0 and dc == 0:
+                    continue
+                rr, cc = r + dr, c + dc
+                if 0 <= rr < H and 0 <= cc < W:
+                    nbrs.append(((rr, cc), math.hypot(dr, dc)))  # 1.0 or sqrt(2)
+        return nbrs
+
+    @staticmethod
+    def _heuristic(a: Coord, b: Coord) -> float:
+        return math.hypot(a[0] - b[0], a[1] - b[1])
+
+    @staticmethod
+    def _reconstruct(came_from: Dict[Coord, Coord], current: Coord) -> List[Coord]:
+        path = [current]
+        while current in came_from:
+            current = came_from[current]
+            path.append(current)
+        path.reverse()
+        return path
+
+    def _is_free(self, occ: np.ndarray, p: Coord) -> bool:
+        return int(occ[p[0], p[1]]) <= self.occ_th
+
+    def plan_grid(self, grid: GridMap, start_xy: Point, goal_xy: Point) -> Optional[List[Coord]]:
+        """Run A* on the combined occupancy (0 free, >occ_th blocked)."""
+        occ = grid.combined()
+        if occ.ndim != 2:
+            raise ValueError("Occupancy grid must be 2D")
+        H, W = occ.shape
+
+        s = grid.world_to_grid(*start_xy)
+        g = grid.world_to_grid(*goal_xy)
+
+        # Basic validity checks
+        if not (0 <= s[0] < H and 0 <= s[1] < W and 0 <= g[0] < H and 0 <= g[1] < W):
+            return None
+        if not self._is_free(occ, s) or not self._is_free(occ, g):
+            return None
+
+        # Standard A*: allow duplicates in heap, discard stale entries on pop.
+        open_heap: List[Tuple[float, float, Coord]] = []  # (f, g, node)
+        came_from: Dict[Coord, Coord] = {}
+        g_score = {s: 0.0}
+
+        heapq.heappush(open_heap, (self._heuristic(s, g), 0.0, s))
+
+        closed: set[Coord] = set()
+
+        while open_heap:
+            f_curr, g_curr, current = heapq.heappop(open_heap)
+            if current in closed:
+                continue
+            # Stale entry check
+            if g_curr > g_score.get(current, float("inf")):
+                continue
+
+            if current == g:
+                return self._reconstruct(came_from, current)
+
+            closed.add(current)
+
+            for nb, step_cost in self._neighbors(H, W, current):
+                if not self._is_free(occ, nb) or nb in closed:
+                    continue
+                tentative = g_curr + step_cost
+                if tentative < g_score.get(nb, float("inf")):
+                    came_from[nb] = current
+                    g_score[nb] = tentative
+                    f = tentative + self._heuristic(nb, g)
+                    heapq.heappush(open_heap, (f, tentative, nb))
+
+        return None  # no path
+
+    # --------------- LOS & Pruning ---------------
+    @staticmethod
+    def _supercover_line(p0: Coord, p1: Coord) -> List[Coord]:
+        """Supercover line: visits all grid cells touched by the segment."""
+        r0, c0 = p0
+        r1, c1 = p1
+        dr = r1 - r0
+        dc = c1 - c0
+        sr = 1 if dr > 0 else -1 if dr < 0 else 0
+        sc = 1 if dc > 0 else -1 if dc < 0 else 0
+        dr = abs(dr)
+        dc = abs(dc)
+        r, c = r0, c0
+        cells = [(r, c)]
+        if dr == 0 and dc == 0:
+            return cells
+        if dc >= dr:
+            err = dc // 2
+            for _ in range(dc):
+                c += sc
+                err += dr
+                if err >= dc:
+                    err -= dc
+                    r += sr
+                    cells.append((r, c - sc))
+                cells.append((r, c))
+        else:
+            err = dr // 2
+            for _ in range(dr):
+                r += sr
+                err += dc
+                if err >= dr:
+                    err -= dr
+                    c += sc
+                    cells.append((r - sr, c))
+                cells.append((r, c))
+        return cells
+
+    def line_free(self, occ: np.ndarray, a: Coord, b: Coord) -> bool:
+        H, W = occ.shape
+        for r, c in self._supercover_line(a, b):
+            if r < 0 or r >= H or c < 0 or c >= W:
+                return False
+            if not self._is_free(occ, (r, c)):
+                return False
+        return True
+
+    def prune_world(self, grid: GridMap, path_grid: List[Coord]) -> List[Point]:
+        if not path_grid:
+            return []
+        occ = grid.combined()
+        pruned: List[Coord] = [path_grid[0]]
+        anchor = path_grid[0]
+        for i in range(1, len(path_grid)):
+            nxt = path_grid[i]
+            if not self.line_free(occ, anchor, nxt):
+                prev = path_grid[i - 1]
+                if prev != pruned[-1]:
+                    pruned.append(prev)
+                anchor = prev
+        if pruned[-1] != path_grid[-1]:
+            pruned.append(path_grid[-1])
+        return [grid.grid_to_world(r, c) for (r, c) in pruned]
+
+    # --------------- External API ---------------
+    def plan(self, grid: GridMap, start_xy: Point, goal_xy: Point) -> Optional[PlanResult]:
+        path_grid = self.plan_grid(grid, start_xy, goal_xy)
+        if path_grid is None:
+            return None
+        path_world = [grid.grid_to_world(r, c) for (r, c) in path_grid]
+
+        # Compute true cost along the grid path
+        cost = 0.0
+        for (r0, c0), (r1, c1) in zip(path_grid, path_grid[1:]):
+            cost += math.hypot(r1 - r0, c1 - c0)
+
+        pruned = self.prune_world(grid, path_grid)
+        return PlanResult(
+            path_grid=path_grid,
+            path_world=path_world,
+            pruned_world=pruned,
+            cost=cost,
+            planned_at=time.time(),
+        )
+
+    # --------------- Replanning helpers ---------------
+    @staticmethod
+    def cross_track_error(pose_xy: Point, path_world: List[Point]) -> float:
+        if not path_world:
+            return float("inf")
+        px, py = pose_xy
+        min_d = float("inf")
+        for i in range(len(path_world) - 1):
+            x1, y1 = path_world[i]
+            x2, y2 = path_world[i + 1]
+            vx, vy = x2 - x1, y2 - y1
+            wx, wy = px - x1, py - y1
+            seg_len2 = vx * vx + vy * vy + 1e-9
+            t = max(0.0, min(1.0, (wx * vx + wy * vy) / seg_len2))
+            projx, projy = x1 + t * vx, y1 + t * vy
+            d = math.hypot(px - projx, py - projy)
+            if d < min_d:
+                min_d = d
+        return min_d
+
+    def path_intersects_obstacles(self, grid: GridMap, path_grid: List[Coord]) -> bool:
+        if not path_grid:
+            return False
+        occ = grid.combined()
+        return any(not self._is_free(occ, rc) for rc in path_grid)
+
+    @staticmethod
+    def time_to_replan(last_plan_time: float, period_s: float = 2.5) -> bool:
+        return (time.time() - last_plan_time) >= period_s
