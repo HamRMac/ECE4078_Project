@@ -1,10 +1,13 @@
 import math
+import logging
 from typing import Tuple
 
 import numpy as np
 
 from warnings import warn
 
+
+log = logging.getLogger(__name__)
 
 class BaseController:
     def __init__(self,
@@ -48,11 +51,13 @@ class TurnThenGoController(BaseController):
             turn_dir = 1 if herr > 0 else -1
             turn_mag = min(1.0, abs(herr) / 0.8)
             turn_tick = int(min(self.max_turn_tick, max(self.min_turn_tick, turn_mag * self.max_turn_tick)))
+            log.debug("TTG rotate: herr=%.3f dir=%d tick=%d", herr, turn_dir, turn_tick)
             return 0, turn_dir, 0, turn_tick, False
 
         # Drive forward if aligned
         fwd_mag = min(1.0, dist / 0.5)
         fwd_tick = int(min(self.max_forward_tick, max(self.min_forward_tick, fwd_mag * self.max_forward_tick)))
+        log.debug("TTG forward: dist=%.3f tick=%d", dist, fwd_tick)
         return 1, 0, fwd_tick, 0, False
 
 
@@ -72,6 +77,7 @@ class PurePursuitController(BaseController):
         dx, dy = gx - x, gy - y
         dist = float(math.hypot(dx, dy))
         if dist <= self.pos_tol:
+            log.debug("PPC done: dist=%.3f tol=%.3f", dist, self.pos_tol)
             return 0, 0, 0, 0, True
 
         # Body-frame coordinates of goal (approximate lookahead behavior)
@@ -96,6 +102,7 @@ class PurePursuitController(BaseController):
         fwd_scale = max(0.2, 1.0 - min(1.0, abs(kappa)))
         fwd_tick = int(min(self.max_forward_tick, max(self.min_forward_tick, fwd_scale * self.max_forward_tick)))
 
+        log.debug("PPC step: kappa=%.3f turn_dir=%d turn_tick=%d fwd_tick=%d", kappa, turn_dir, turn_tick, fwd_tick)
         return 1, turn_dir, fwd_tick, turn_tick, False
 
 
@@ -126,4 +133,3 @@ class ControllerManager:
 
     def compute(self, pose, goal):
         return self.ctrl.compute(pose, goal)
-

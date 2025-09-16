@@ -2,9 +2,11 @@
 import numpy as np
 import cv2
 import os, sys
+import logging
 
 sys.path.insert(0, "{}/util".format(os.getcwd()))
 import util.measure as measure
+log = logging.getLogger(__name__)
 
 class aruco_detector:
 
@@ -65,11 +67,13 @@ class aruco_detector:
         corners, ids, rejected = cv2.aruco.detectMarkers(
             img, self.aruco_dict, parameters=self.aruco_params)
         if ids is None:
+            log.debug("ArUco detect: 0 markers")
             return [], img
         rvecs, tvecs, _ = cv2.aruco.estimatePoseSingleMarkers(
             corners, self.marker_length, self.camera_matrix, self.distortion_params)
         # Compute marker cube-centered positions (replaces previous incorrect planar radial offset)
         measurements = self._aggregate_measurements(ids, rvecs, tvecs)
+        log.debug("ArUco detect: %d ids, %d measurements", len(ids.flatten()) if ids is not None else 0, len(measurements))
         # Draw markers on image copy
         img_marked = img.copy()
         cv2.aruco.drawDetectedMarkers(img_marked, corners, ids)
@@ -80,11 +84,13 @@ class aruco_detector:
         detector = cv2.aruco.ArucoDetector(self.aruco_dict, self.aruco_params)
         corners, ids, _ = detector.detectMarkers(gray)
         if ids is None or len(ids) == 0:
+            log.debug("ArUco detect(API): 0 markers")
             return [], img
         rvecs, tvecs, _ = cv2.aruco.estimatePoseSingleMarkers(
             corners, self.marker_length, self.camera_matrix, self.distortion_params)
         # Use same cube-centered aggregation as legacy path
         measurements = self._aggregate_measurements(ids, rvecs, tvecs)
+        log.debug("ArUco detect(API): %d ids, %d measurements", len(ids.flatten()) if ids is not None else 0, len(measurements))
         img_marked = img.copy()
         cv2.aruco.drawDetectedMarkers(img_marked, corners, ids)
         return measurements, img_marked

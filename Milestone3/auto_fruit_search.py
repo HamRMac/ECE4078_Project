@@ -8,6 +8,7 @@ import numpy as np
 import json
 import argparse
 import time
+import logging
 
 # import utility functions
 sys.path.insert(0, "{}/util".format(os.getcwd()))
@@ -25,6 +26,9 @@ from navigation.controller import ControllerManager
 from planning.astar import AStarPlanner
 from gui.og_viewer import OGViewer
 from planning.grid_map import GridMap
+
+# Module logger
+log = logging.getLogger(__name__)
 
 def read_true_map(fname):
     """Read the ground truth map and output the pose of the ArUco markers and 5 target fruits&vegs to search for
@@ -147,9 +151,9 @@ def drive_to_point(waypoint, robot_pose, controller_kind: str = "ttg"):
     # Stop safely
     ppi.set_velocity([0, 0])
     if arrived:
-        print("Arrived at [{:.2f}, {:.2f}]".format(waypoint[0], waypoint[1]))
+        log.info("Arrived at waypoint (%.2f, %.2f)", waypoint[0], waypoint[1])
     else:
-        print("Stopped before arrival at [{:.2f}, {:.2f}]".format(waypoint[0], waypoint[1]))
+        log.info("Stopped before arrival at waypoint (%.2f, %.2f)", waypoint[0], waypoint[1])
 
 
 def get_robot_pose(penguin_pi, aruco_detector, ekf):
@@ -193,6 +197,11 @@ def get_robot_pose(penguin_pi, aruco_detector, ekf):
         robot_pose = [float(rs[0]), float(rs[1]), float(rs[2])]
     except Exception:
         robot_pose = [0.0, 0.0, 0.0]
+    # Debug pose log
+    try:
+        log.debug("Pose x=%.3f y=%.3f th=%.2f dt=%.3f lv=%.1f rv=%.1f lms=%d", robot_pose[0], robot_pose[1], robot_pose[2], dt, l_vel, r_vel, len(lms))
+    except Exception:
+        pass
 
     ####################################################
 
@@ -223,18 +232,25 @@ if __name__ == "__main__":
     parser.add_argument("--port", metavar='', type=int, default=8080)
     parser.add_argument("--controller", type=str, default='ttg', choices=['ttg','ppc','rhp'], help='Controller type: turn-then-go (ttg), pure pursuit (ppc), or receding horizon (rhp)')
     parser.add_argument("--no_run", action='store_true', help='Only load map, world model, and occupancy grid; do not start autonomy')
+    parser.add_argument("--log", type=str, default='INFO', choices=['DEBUG','INFO','WARNING','ERROR','CRITICAL'], help='Logging level')
     args, _ = parser.parse_known_args()
+
+    # Configure root logging early
+    logging.basicConfig(level=getattr(logging, args.log.upper(), logging.INFO),
+                        format='[%(levelname)s] %(name)s: %(message)s')
+    log.info("auto_fruit_search starting (ip=%s, port=%s, controller=%s, no_run=%s)", args.ip, args.port, args.controller, args.no_run)
 
     ppi = PenguinPi(args.ip,args.port)
 
     # read in the true map
+    log.info("Loading map file: %s", args.map)
     fruits_list, fruits_true_pos, aruco_true_pos = read_true_map(args.map)
     # read shopping list
     search_list = read_search_list(args.shopping_list)
     try:
         print_target_fruits_pos(search_list, fruits_list, fruits_true_pos)
     except Exception:
-        print("Loaded shopping list (positions not available in minimal map).")
+        log.info("Loaded shopping list (positions not available in minimal map).")
 
     # Build world model and occupancy grid
     try:
@@ -243,20 +259,22 @@ if __name__ == "__main__":
                        inflation_margin=0.05, boundary_margin=0.01,
                        arena_bounds_wm=(-1.4, -1.4, 1.4, 1.4))
         grid.build_from_aruco(aruco_true_pos)
-        print("[WM] Occupancy grid built:", grid.size, "cells @", grid.res, "m")
+        log.info("[WM] Occupancy grid built: size=%s res=%.3f m", str(grid.size), grid.res)
     except Exception as e:
-        print("[WM] Building occupancy grid failed:", e)
+        log.exception("[WM] Building occupancy grid failed: %s", e)
 
     # Initialise the EKF functions
+    log.info("Initialising EKF using calibration dir: %s", args.calib_dir)
     ekf = init_ekf(args.calib_dir, args.ip)
     # Pre-seed EKF with known ArUco positions from the provided map (Level 4/minimal map)
     try:
         ekf.seed_from_map_file(args.map, initial_covariance=1e-10, only_aruco=True)
-        print("[EKF] Seeded known ArUco landmarks from map:", args.map)
+        log.info("[EKF] Seeded ArUco landmarks from map: %s", args.map)
     except Exception as e:
-        print("[EKF] Seeding from map failed:", e)
+        log.warning("[EKF] Seeding from map failed: %s", e)
     # Create ArUco detector
     aruco_det = aruco.aruco_detector(ekf.robot, marker_length=0.07)
+    log.info("ArUco detector initialised (marker_length=0.07)")
 
     # Interactive OG viewer (PyGame) always enabled. Closing window ends program.
     def _get_pose():
@@ -265,12 +283,16 @@ if __name__ == "__main__":
             return [0.0, 0.0, 0.0]
         return get_robot_pose(ppi, aruco_det, ekf)
 
-    viewer = OGViewer(grid=grid, planner=AStarPlanner(), get_pose_fn=_get_pose, window_scale=4, fps=15)
+    viewer = OGViewer(grid=grid,
+                      planner=AStarPlanner(),
+                      get_pose_fn=_get_pose,
+                      window_scale=4,
+                      fps=15,
+                      controller_kind=args.controller,
+                      dry_run=(args.no_run or args.ip == 'localhost'),
+                      ppi=ppi)
+    # Start the viewer and run until closed
+    log.info("Launching OGViewer GUI")
     viewer.run()
+    log.info("OGViewer closed; exiting program")
     sys.exit(0)
-
-    # Set the default waypoints
-    waypoint = [0.0,0.0]
-    robot_pose = [0.0,0.0,0.0]
-
-    # Legacy waypoint loop retained below (unreachable due to GUI exit).

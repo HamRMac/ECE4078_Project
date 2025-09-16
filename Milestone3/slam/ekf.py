@@ -4,6 +4,9 @@ import cv2
 import math
 import pygame
 from robot import Robot
+import logging
+
+log = logging.getLogger(__name__)
 
 class EKF:
     # Implementation of an EKF for SLAM
@@ -15,7 +18,7 @@ class EKF:
     ##########################################
 
     def __init__(self, robot: Robot):
-        print("Initialising ekf.py V2.0")
+        log.info("Initialising ekf.py V2.0")
         # State components
         self.robot = robot
         self.markers = np.zeros((2,0))
@@ -154,6 +157,7 @@ class EKF:
                 theta = math.atan2(R[1][0], R[0][0])
                 self.robot.state[:2]=t[:2]
                 self.robot.state[2]=theta
+                log.info("EKF recovered pose from %d landmarks", int(lm_new.shape[1]))
                 return True
             else:
                 return False
@@ -279,7 +283,7 @@ class EKF:
                 # Print lock info: id and estimated position (rounded to 2 decimals)
                 pos = lm_inertial.flatten()
                 pos_str = f"({pos[0]:.2f}, {pos[1]:.2f})"
-                print(f"[EKF] Locked marker {lm.tag} at {pos_str} as reference (high certainty)")
+                log.info("[EKF] Locked marker %s at %s as reference (high certainty)", lm.tag, pos_str)
 
             self.P[-2,-2] = new_cov_val
             self.P[-1,-1] = new_cov_val

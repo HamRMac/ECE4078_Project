@@ -9,6 +9,9 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 
 from .grid_map import GridMap
+import logging
+
+log = logging.getLogger(__name__)
 
 Coord = Tuple[int, int]   # (row, col)
 Point = Tuple[float, float]  # (x, y)
@@ -65,6 +68,7 @@ class AStarPlanner:
 
     def plan_grid(self, grid: GridMap, start_xy: Point, goal_xy: Point) -> Optional[List[Coord]]:
         """Run A* on the combined occupancy (0 free, >occ_th blocked)."""
+        log.debug("A* plan_grid start=%s goal=%s", str(start_xy), str(goal_xy))
         occ = grid.combined()
         if occ.ndim != 2:
             raise ValueError("Occupancy grid must be 2D")
@@ -75,8 +79,10 @@ class AStarPlanner:
 
         # Basic validity checks
         if not (0 <= s[0] < H and 0 <= s[1] < W and 0 <= g[0] < H and 0 <= g[1] < W):
+            log.warning("A*: start or goal out of bounds s=%s g=%s size=(%d,%d)", str(s), str(g), H, W)
             return None
         if not self._is_free(occ, s) or not self._is_free(occ, g):
+            log.info("A*: start or goal blocked s_free=%s g_free=%s", self._is_free(occ, s), self._is_free(occ, g))
             return None
 
         # Standard A*: allow duplicates in heap, discard stale entries on pop.
@@ -97,7 +103,9 @@ class AStarPlanner:
                 continue
 
             if current == g:
-                return self._reconstruct(came_from, current)
+                path = self._reconstruct(came_from, current)
+                log.debug("A*: goal reached; path_len=%d", len(path))
+                return path
 
             closed.add(current)
 
@@ -111,6 +119,7 @@ class AStarPlanner:
                     f = tentative + self._heuristic(nb, g)
                     heapq.heappush(open_heap, (f, tentative, nb))
 
+        log.info("A*: no path found")
         return None  # no path
 
     # --------------- LOS & Pruning ---------------
@@ -163,6 +172,7 @@ class AStarPlanner:
     def prune_world(self, grid: GridMap, path_grid: List[Coord]) -> List[Point]:
         if not path_grid:
             return []
+        log.debug("Pruning path of length %d", len(path_grid))
         occ = grid.combined()
         pruned: List[Coord] = [path_grid[0]]
         anchor = path_grid[0]
@@ -179,6 +189,7 @@ class AStarPlanner:
 
     # --------------- External API ---------------
     def plan(self, grid: GridMap, start_xy: Point, goal_xy: Point) -> Optional[PlanResult]:
+        t0 = time.time()
         path_grid = self.plan_grid(grid, start_xy, goal_xy)
         if path_grid is None:
             return None
@@ -190,13 +201,15 @@ class AStarPlanner:
             cost += math.hypot(r1 - r0, c1 - c0)
 
         pruned = self.prune_world(grid, path_grid)
-        return PlanResult(
+        pr = PlanResult(
             path_grid=path_grid,
             path_world=path_world,
             pruned_world=pruned,
             cost=cost,
             planned_at=time.time(),
         )
+        log.info("A* plan complete: nodes=%d pruned=%d cost=%.2f dt=%.3fs", len(path_grid), len(pruned), cost, pr.planned_at - t0)
+        return pr
 
     # --------------- Replanning helpers ---------------
     @staticmethod
