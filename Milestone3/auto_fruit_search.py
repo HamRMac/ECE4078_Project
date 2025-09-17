@@ -96,8 +96,10 @@ def print_target_fruits_pos(search_list, fruit_list, fruit_true_pos):
     @param search_list: search order of the fruits
     @param fruit_list: list of target fruits
     @param fruit_true_pos: positions of the target fruits
-    """
 
+    @output ordered list of positions of the target fruit
+    """
+    search_poses = []
     print("Search order:")
     n_fruit = 1
     for fruit in search_list:
@@ -105,6 +107,7 @@ def print_target_fruits_pos(search_list, fruit_list, fruit_true_pos):
         for i in range(len(fruit_list)):
             if fruit == fruit_list[i]:
                 try:
+                    search_poses.append([fruit_true_pos[i][0],fruit_true_pos[i][1]])
                     print('{}) {} at [{}, {}]'.format(
                         n_fruit,
                         fruit,
@@ -114,6 +117,8 @@ def print_target_fruits_pos(search_list, fruit_list, fruit_true_pos):
                     # In minimal map there may be no fruit positions
                     print('{}) {}'.format(n_fruit, fruit))
         n_fruit += 1
+
+    return search_poses
 
 
 # Waypoint navigation
@@ -214,6 +219,20 @@ def get_robot_pose(penguin_pi, aruco_detector, ekf):
 
     return robot_pose
 
+def calc_waypoint(search_pose, robot_pose, d=0):
+    # Returns waypoint for next fruit from current position, needs the pose of the next target fruit, current robot pose and the distance from the centre of the fruit the waypoint should be
+    # Should be run once at the start of the run and once again every time a successive waypoint is reached
+    th = np.arctan2(robot_pose[1]-search_pose[1],robot_pose[0]-search_pose[0])
+
+    x_waypoint = search_pose[0] + d * np.cos(th)
+    y_waypoint = search_pose[1] + d * np.sin(th)
+
+    waypoint = [x_waypoint, y_waypoint]
+
+    return waypoint
+    
+
+
 # wheel and camera calibration for SLAM
 def init_ekf(datadir, ip):
     fileK = "{}intrinsic.txt".format(datadir)
@@ -240,6 +259,7 @@ if __name__ == "__main__":
     parser.add_argument("--controller", type=str, default='ttg', choices=['ttg','ppc','rhp'], help='Controller type: turn-then-go (ttg), pure pursuit (ppc), or receding horizon (rhp)')
     parser.add_argument("--no_run", action='store_true', help='Only load map, world model, and occupancy grid; do not start autonomy')
     parser.add_argument("--log", type=str, default='INFO', choices=['DEBUG','INFO','WARNING','ERROR','CRITICAL'], help='Logging level')
+    parser.add_argument("--level", type=int, default=1)
     args, _ = parser.parse_known_args()
 
     # Configure root logging early
@@ -255,7 +275,7 @@ if __name__ == "__main__":
     # read shopping list
     search_list = read_search_list(args.shopping_list)
     try:
-        print_target_fruits_pos(search_list, fruits_list, fruits_true_pos)
+        search_poses = print_target_fruits_pos(search_list, fruits_list, fruits_true_pos)
     except Exception:
         log.info("Loaded shopping list (positions not available in minimal map).")
 
@@ -289,6 +309,10 @@ if __name__ == "__main__":
         if args.no_run or args.ip == 'localhost':
             return [0.0, 0.0, 0.0]
         return get_robot_pose(ppi, aruco_det, ekf)
+    
+    if args.level == 2 or args.level == 3:
+        next_waypoint = calc_waypoint(search_poses[0], _get_pose(), 0.1)
+        print(next_waypoint)
 
     viewer = OGViewer(grid=grid,
                       planner=AStarPlanner(),
