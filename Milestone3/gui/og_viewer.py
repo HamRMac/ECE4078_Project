@@ -173,20 +173,25 @@ class OGViewer:
         x, y = self.grid.grid_to_world(r, c)
         return x, y
 
-    def _replan(self, start_xy: Tuple[float, float], goal_xy: Tuple[float, float]) -> None:
-        """Run the A* planner and store the result for overlay."""
+    def _replan(self, start_xy: Tuple[float, float], goal_xy: Tuple[float, float]) -> bool:
+        """Run the A* planner and, if successful, replace the current plan.
+
+        Returns True on success, False if planning failed (previous plan retained).
+        """
         try:
             log.info("Planning from %s to %s", str(start_xy), str(goal_xy))
-            self.last_plan = self.planner.plan(self.grid, start_xy, goal_xy)
-            if self.last_plan is None:
-                log.warning("No path found")
-            else:
-                self._wp_idx = 0
-                self._last_plan_time = time.time()
-                log.info("Planned path cells=%d cost=%.2f", len(self.last_plan.path_grid), self.last_plan.cost)
+            new_plan = self.planner.plan(self.grid, start_xy, goal_xy)
+            if new_plan is None:
+                log.warning("No path found; retaining previous plan")
+                return False
+            self.last_plan = new_plan
+            self._wp_idx = 0
+            self._last_plan_time = time.time()
+            log.info("Planned path cells=%d cost=%.2f", len(self.last_plan.path_grid), self.last_plan.cost)
+            return True
         except Exception as e:
-            log.exception("Planning error: %s", e)
-            self.last_plan = None
+            log.exception("Planning error: %s; retaining previous plan", e)
+            return False
 
     def _control_step(self, pose: Tuple[float, float, float]) -> None:
         if self.goal_xy is None or self.last_plan is None or not self.last_plan.pruned_world:
@@ -200,12 +205,14 @@ class OGViewer:
             self._replan(self.start_xy, self.goal_xy)
 
         # Cross-track replan
-        xtrack = AStarPlanner.cross_track_error((pose[0], pose[1]), self.last_plan.pruned_world)
-        if xtrack > self._xtrack_thresh:
-            log.info("Cross-track error %.3f > %.3f; replanning", xtrack, self._xtrack_thresh)
-            self.start_xy = (float(pose[0]), float(pose[1]))
-            self._replan(self.start_xy, self.goal_xy)
-            return
+        # Only compute cross-track if we still have a valid plan
+        if self.last_plan is not None:
+            xtrack = AStarPlanner.cross_track_error((pose[0], pose[1]), self.last_plan.pruned_world)
+            if xtrack > self._xtrack_thresh:
+                log.info("Cross-track error %.3f > %.3f; attempting replanning", xtrack, self._xtrack_thresh)
+                self.start_xy = (float(pose[0]), float(pose[1]))
+                ok = self._replan(self.start_xy, self.goal_xy)
+                # If replanning failed, continue following previous plan; do not early return
 
         # Control towards current waypoint
         self._wp_idx = min(self._wp_idx, len(self.last_plan.pruned_world) - 1)

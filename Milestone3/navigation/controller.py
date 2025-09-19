@@ -13,7 +13,7 @@ class BaseController:
     def __init__(self,
                  pos_tol: float = 0.08,
                  ang_tol: float = 0.2,
-                 max_forward_tick: int = 40,
+                 max_forward_tick: int = 80,
                  min_forward_tick: int = 20,
                  max_turn_tick: int = 30,
                  min_turn_tick: int = 10):
