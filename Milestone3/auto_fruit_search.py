@@ -473,6 +473,8 @@ if __name__ == "__main__":
     parser.add_argument("--controller", type=str, default='ttg', choices=['ttg','ppc','rhp'], help='Controller type: turn-then-go (ttg), pure pursuit (ppc), or receding horizon (rhp)')
     parser.add_argument("--no_run", action='store_true', help='Only load map, world model, and occupancy grid; do not start autonomy')
     parser.add_argument("--log", type=str, default='INFO', choices=['DEBUG','INFO','WARNING','ERROR','CRITICAL'], help='Logging level')
+    parser.add_argument("--use_fusion", action='store_true',
+                        help="Fuse bbox-height with bottom-pixel ground-ray for fruit range")
     parser.add_argument("--level", type=int, default=1)
     parser.add_argument("--use_fusion", action='store_true',
                         help="Fuse bbox-height with bottom-pixel ground-ray for fruit range")
