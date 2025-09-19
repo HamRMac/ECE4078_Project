@@ -473,11 +473,10 @@ if __name__ == "__main__":
     parser.add_argument("--controller", type=str, default='ttg', choices=['ttg','ppc','rhp'], help='Controller type: turn-then-go (ttg), pure pursuit (ppc), or receding horizon (rhp)')
     parser.add_argument("--no_run", action='store_true', help='Only load map, world model, and occupancy grid; do not start autonomy')
     parser.add_argument("--log", type=str, default='INFO', choices=['DEBUG','INFO','WARNING','ERROR','CRITICAL'], help='Logging level')
+    parser.add_argument("--model", type=str, default='', help='YOLO model path for fruit detection (optional)')
     parser.add_argument("--use_fusion", action='store_true',
                         help="Fuse bbox-height with bottom-pixel ground-ray for fruit range")
     parser.add_argument("--level", type=int, default=1)
-    parser.add_argument("--use_fusion", action='store_true',
-                        help="Fuse bbox-height with bottom-pixel ground-ray for fruit range")
     args, _ = parser.parse_known_args()
 
     # Configure root logging early
@@ -521,35 +520,24 @@ if __name__ == "__main__":
     aruco_det = aruco.aruco_detector(ekf.robot, marker_length=0.07)
     log.info("ArUco detector initialised (marker_length=0.07)")
 
-    # Start live target estimator
+    # Optional live detector and fruit ranger for GUI
+    yolo_detector = None
+    fruit_ranger = None
+    target_dims = None
     try:
+        # Camera intrinsics for FruitRanger
         camK = ekf.robot.camera_matrix
-    except Exception:
-        camK = None
-
-    yolo_model_path = os.path.join(os.getcwd(), "YOLO", "model", "yolov8_model.pt")
-
-    def _get_image():
-        try:
-            return ppi.get_image()
-        except Exception:
-            return None
-
-    def _get_pose_for_est():
-        return get_robot_pose(ppi, aruco_det, ekf)
-
-    live_estimator = LiveTargetEstimator(
-        yolo_model_path=yolo_model_path,
-        get_image_fn=_get_image,
-        get_pose_fn=_get_pose_for_est,
-        camera_matrix=camK,
-        use_fusion=args.use_fusion,
-        cam_height_m=0.20,
-        cam_pitch_rad=0.0,
-        fps=4
-    )
-    live_estimator.start()
-    log.info("LiveTargetEstimator started (fusion=%s)", args.use_fusion)
+        from perception.fruit_ranger import FruitRanger
+        from TargetPoseEst import TARGET_DIMENSIONS_DICT as TARGET_DIMS
+        fruit_ranger = FruitRanger(camera_matrix=camK)
+        target_dims = TARGET_DIMS
+        # Model path: CLI --model overrides default
+        if args.model:
+            from YOLO.detector import Detector
+            yolo_detector = Detector(args.model, 384)
+            log.info("YOLO model loaded: %s", args.model)
+    except Exception as e:
+        log.warning("Live detection initialisation issue: %s", e)
 
     # Interactive OG viewer (PyGame) always enabled. Closing window ends program.
     def _get_pose():
@@ -570,24 +558,13 @@ if __name__ == "__main__":
                       controller_kind=args.controller,
                       dry_run=(args.no_run or args.ip == 'localhost'),
                       ARUCO_locations=aruco_true_pos_id,
-                      ppi=ppi)
+                      ppi=ppi,
+                      get_frame_fn=ppi.get_image,
+                      detector=yolo_detector,
+                      fruit_ranger=fruit_ranger,
+                      target_dims=target_dims)
     # Start the viewer and run until closed
     log.info("Launching OGViewer GUI")
     viewer.run()
     log.info("OGViewer closed; exiting program")
-    # Persist live estimates and stop estimator
-    try:
-        latest = live_estimator.get_latest()
-        if latest:
-            out_path = os.path.join(os.getcwd(), "lab_output", "targets_live.txt")
-            os.makedirs(os.path.dirname(out_path), exist_ok=True)
-            with open(out_path, "w") as fo:
-                json.dump(latest, fo, indent=2)
-            log.info("Saved live target estimates to %s", out_path)
-    finally:
-        try:
-            live_estimator.stop()
-        except Exception:
-            pass
-
     sys.exit(0)

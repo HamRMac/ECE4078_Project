@@ -47,12 +47,19 @@ class FruitRanger:
                  pixel_height_sigma_px: float = 3.0,
                  range_scale_beta: float = 0.02,
                  ekf_weight_gamma: float = 1.0,
-                 camera_matrix: np.ndarray | None = None) -> None:
+                 camera_matrix: np.ndarray | None = None,
+                 camera_height_m: float = 0.041,
+                 camera_pitch_rad: float = np.deg2rad(-5.0)
+                 ) -> None:
         self.pixel_centroid_sigma_px = float(pixel_centroid_sigma_px)
         self.pixel_height_sigma_px = float(pixel_height_sigma_px)
         self.range_scale_beta = float(range_scale_beta)
         self.ekf_weight_gamma = float(ekf_weight_gamma)
         self.camera_matrix = camera_matrix
+        self.camera_height_m = camera_height_m
+        self.camera_pitch_rad = camera_pitch_rad
+
+        print("FruitRanger initialised with camera height %.3f m, pitch %.3f rad" % (self.camera_height_m, self.camera_pitch_rad))
 
     def from_bbox_height(self,
                          bbox: List[float] | Tuple[float, float, float, float],
@@ -97,11 +104,85 @@ class FruitRanger:
         }
 
     def from_ground_ray(self,
-                        bbox: List[float] | Tuple[float, float, float, float],
-                        camera_height_m: float,
-                        camera_pitch_rad: float) -> Dict:
-        """Stub for ground-ray method (bottom-most pixel → ground plane)."""
-        raise NotImplementedError("Ground-ray method not implemented yet.")
+                    bbox: List[float] | Tuple[float, float, float, float]) -> Optional[Dict[str, float]]:
+        """Estimate r, theta using ground ray back projection from the bbox bottom.
+
+        Assumptions:
+        - Camera at height H above the ground, pitched down by camera_pitch_rad (radians).
+        - Camera frame: x forward, y left. Positive theta when target is to the left.
+        - Ground plane at z=0 with camera optical centre at z=H.
+
+        Returns dict like from_bbox_height: {'r','theta','sigma_r','sigma_theta','x','y'}.
+        """
+        if self.camera_matrix is None or self.camera_height_m <= 0:
+            return None
+
+        try:
+            x, y, w, h = [float(v) for v in bbox]
+        except Exception:
+            return None
+        if w <= 0 or h <= 0:
+            return None
+
+        f = float(self.camera_matrix[0, 0])
+        cx = float(self.camera_matrix[0, 2]) if self.camera_matrix.shape[1] >= 3 else 160.0
+        cy = float(self.camera_matrix[1, 2]) if self.camera_matrix.shape[0] >= 3 else 120.0
+
+        # Bottom midpoint pixel
+        xb = x + 0.5 * w
+        yb = y + h
+
+        # Horizontal bearing (left positive)
+        theta = float(np.arctan2(cx - xb, f))
+
+        # Vertical offset from optical axis (downward positive since image y increases downward)
+        v = (yb - cy) / f
+        alpha = float(np.arctan(v))
+
+        # Total depression angle from horizontal
+        gamma = float(alpha + float(self.camera_pitch_rad))
+
+        # Guard against rays parallel or upward relative to ground plane
+        t = np.tan(gamma)
+        if t <= 1e-9:
+            return None
+
+        # Range along ground
+        r = float(self.camera_height_m / t)
+
+        # Cartesian in camera frame
+        x_cam = float(r * np.cos(theta))
+        y_cam = float(r * np.sin(theta))
+
+        # Uncertainties
+        sigma_px = float(self.pixel_centroid_sigma_px)
+
+        # Bearing uncertainty from horizontal pixel uncertainty
+        sigma_theta = float(sigma_px / f)
+
+        # Range uncertainty via propagation: dr/dgamma * dgamma/dyb * sigma_px
+        # dr/dgamma = -H / sin^2(gamma)
+        sin_g = np.sin(gamma)
+        sin_g2 = max(sin_g * sin_g, 1e-12)
+        dr_dgamma = -self.camera_height_m / sin_g2
+
+        # d alpha / d yb = 1 / (f * (1 + v^2))
+        dalpha_dyb = 1.0 / (f * (1.0 + v * v))
+
+        # d gamma / d yb = d alpha / d yb
+        dgamma_dyb = dalpha_dyb
+
+        sigma_r_from_y = abs(dr_dgamma * dgamma_dyb) * sigma_px
+
+        # Add scale term
+        sigma_r = float(np.sqrt(sigma_r_from_y ** 2 + (self.range_scale_beta * r * r)))
+
+        return {
+            'r': r, 'theta': float(theta),
+            'sigma_r': sigma_r, 'sigma_theta': sigma_theta,
+            'x': x_cam, 'y': y_cam
+        }
+
 
     def fuse(self,
              measurements: List[Dict[str, float]],

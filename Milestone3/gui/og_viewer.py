@@ -17,6 +17,7 @@ from __future__ import annotations
 import sys
 import time
 from typing import Optional, Tuple, List
+import json
 import logging
 
 import numpy as np
@@ -47,6 +48,11 @@ class OGViewer:
         dry_run: bool = False,
         ARUCO_locations: np.ndarray = None,
         ppi=None,
+        # Optional live detection integration
+        get_frame_fn=None,
+        detector=None,
+        fruit_ranger=None,
+        target_dims: Optional[dict] = None,
     ) -> None:
         """
         Parameters
@@ -67,6 +73,11 @@ class OGViewer:
         self.ppi = ppi
 
         self.ARUCO_locations = ARUCO_locations
+        # Live detection handles
+        self.get_frame_fn = get_frame_fn
+        self.detector = detector
+        self.fruit_ranger = fruit_ranger
+        self.target_dims = target_dims or {}
 
         # Interactive state
         self.goal_xy: Optional[Tuple[float, float]] = None
@@ -83,7 +94,12 @@ class OGViewer:
         # Pre-render initial OG image to determine window size
         self._vis = self.grid.render(scale=self.scale)
         h, w = self._vis.shape[:2]
-        self._surface = pygame.display.set_mode((w, h))
+        # Map panel size
+        map_w, map_h = w, h
+        # If a camera frame source is provided, allocate a right-hand panel of same size
+        self._has_cam = callable(self.get_frame_fn)
+        win_w = map_w * (2 if self._has_cam else 1)
+        self._surface = pygame.display.set_mode((win_w, map_h))
         self._clock = pygame.time.Clock()
         log.info("OGViewer init: window=%dx%d scale=%d fps=%d", w, h, self.scale, self.fps)
 
@@ -268,6 +284,70 @@ class OGViewer:
                 except Exception:
                     pass
             self._draw_overlay(self._surface, (float(pose[0]), float(pose[1])))
+
+            # Right panel: live video + detector results
+            if self._has_cam:
+                try:
+                    frame_rgb = self.get_frame_fn()
+                    frame_bgr = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
+                except Exception as e:
+                    sys.stderr.write(f"camera_error: {e}\n")
+                    frame_bgr = np.zeros_like(self._vis)
+
+                det_vis = frame_bgr.copy()
+                results = []
+                try:
+                    if self.detector is not None:
+                        det_out, det_vis = self.detector.detect_single_image(frame_bgr)
+                        if isinstance(det_out, list):
+                            for item in det_out:
+                                # Expect (label, [x,y,w,h])
+                                try:
+                                    label, bbox = item[0], item[1]
+                                except Exception:
+                                    continue
+                                # Compute range/theta with FruitRanger if available
+                                rng = -1.0; th = 0.0
+                                if self.fruit_ranger is not None:
+                                    true_h = None
+                                    if isinstance(label, str) and label in self.target_dims:
+                                        dims = self.target_dims[label]
+                                        if isinstance(dims, (list, tuple)) and len(dims) == 3:
+                                            true_h = float(dims[2])
+                                    if true_h is None:
+                                        true_h = 0.08
+                                    # Select your method!
+                                    est = self.fruit_ranger.from_bbox_height(bbox, true_h)
+                                    #est = self.fruit_ranger.from_ground_ray(bbox)
+                                    if est is not None:
+                                        rng = float(est['r'])
+                                        th = float(np.degrees(est['theta']))
+                                # class_id mapping
+                                if isinstance(label, int):
+                                    cid = int(label)
+                                else:
+                                    keys = list(self.target_dims.keys())
+                                    cid = keys.index(label) if label in keys else -1
+                                results.append({"class_id": cid, "range": rng, "theta": th})
+                    # Print JSON line for this frame
+                    try:
+                        sys.stdout.write(json.dumps(results) + "\n")
+                        sys.stdout.flush()
+                    except Exception as e:
+                        sys.stderr.write(f"json_error: {e}\n")
+                except Exception as e:
+                    sys.stderr.write(f"detector_error: {e}\n")
+
+                # Draw the camera panel on the right
+                try:
+                    mh, mw = self._vis.shape[:2]
+                    cam_panel = cv2.resize(det_vis, (mw, mh), interpolation=cv2.INTER_NEAREST)
+                    cam_rgb = cv2.cvtColor(cam_panel, cv2.COLOR_BGR2RGB)
+                    pygame_cam = pygame.surfarray.make_surface(np.rot90(cam_rgb))
+                    pygame_cam = pygame.transform.flip(pygame_cam, True, False)
+                    self._surface.blit(pygame_cam, (mw, 0))
+                except Exception as e:
+                    sys.stderr.write(f"cam_panel_error: {e}\n")
 
             # Control step
             self._control_step((float(pose[0]), float(pose[1]), float(pose[2])))
