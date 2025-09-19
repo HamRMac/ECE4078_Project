@@ -9,6 +9,10 @@ import json
 import argparse
 import time
 import logging
+import threading
+from collections import defaultdict, deque
+
+from YOLO.detector import Detector
 
 # import utility functions
 sys.path.insert(0, "{}/util".format(os.getcwd()))
@@ -248,6 +252,216 @@ def init_ekf(datadir, ip):
     robot = Robot(baseline, scale, camera_matrix, dist_coeffs)
     return EKF(robot)
 
+
+###### Live target estimation helpers and thread ######
+TARGET_TYPES = ['orange','lemon','lime','tomato','capsicum','potato','pumpkin','garlic']
+
+
+def estimate_pose(camera_matrix, obj_info, robot_pose, use_fusion=False, cam_height_m=0.20, cam_pitch_rad=0.0):
+    """Estimate world (x,y) for a single detected object bbox.
+
+    Parameters
+    - camera_matrix: 3x3 intrinsics
+    - obj_info: [label, [x,y,w,h]] or (label, bbox)
+    - robot_pose: [x,y,theta]
+    - use_fusion: whether to fuse bbox-depth with ground-ray
+    - cam_height_m, cam_pitch_rad: camera mounting
+
+    Returns: dict {'x': float, 'y': float} or None on failure
+    """
+    try:
+        label, bbox = obj_info[0], obj_info[1]
+    except Exception:
+        return None
+
+    # Ensure bbox is in (x,y,w,h) top-left format
+    x, y, w, h = [float(v) for v in bbox]
+
+    # Convert to center pixel coordinates
+    cx_pix = x + w / 2.0
+    cy_pix = y + h / 2.0
+
+    fx = float(camera_matrix[0, 0])
+    fy = float(camera_matrix[1, 1])
+    cx = float(camera_matrix[0, 2])
+    cy = float(camera_matrix[1, 2])
+
+    # Size lookup: use first entry as nominal height (m)
+    target_dimensions_dict = {
+        'orange':[0.07,0.07,0.073],'lemon':[0.078,0.053,0.050],'pear':[0.076,0.074,0.110],
+        'tomato':[0.065,0.065,0.060],'capsicum':[0.076,0.074,0.090],'potato':[0.095,0.065,0.070],
+        'pumpkin':[0.080,0.080,0.080],'garlic':[0.065,0.060,0.070],'lime':[0.074,0.052,0.050],
+    }
+    true_sizes = target_dimensions_dict.get(label, target_dimensions_dict['tomato'])
+    true_height = float(true_sizes[0])
+
+    # Depth from bbox height
+    bbox_h_pix = max(1.0, float(h))
+    Z_bbox = (fx * true_height) / bbox_h_pix
+
+    Z_fused = Z_bbox
+    Z_ground = None
+    if use_fusion:
+        # Estimate depth by intersecting bottom pixel with ground plane (approximate)
+        y_bottom = y + h
+        v = (y_bottom - cy) / fy
+        # approximate formula for depth along optical axis to ground intersection
+        denom = np.cos(cam_pitch_rad) * v + np.sin(cam_pitch_rad)
+        if abs(denom) > 1e-6:
+            Z_ground = (cam_height_m) / denom
+            # clamp to reasonable range
+            if Z_ground <= 0 or Z_ground > 10.0:
+                Z_ground = None
+
+    # Fuse with logistic weight if both available
+    if use_fusion and Z_ground is not None:
+        z0 = 0.6
+        k = 8.0
+        w_bbox = 1.0 / (1.0 + np.exp(k * (Z_bbox - z0)))
+        w_bbox = float(np.clip(w_bbox, 0.05, 0.95))
+        Z_fused = w_bbox * Z_bbox + (1.0 - w_bbox) * Z_ground
+
+    # Back-project center pixel into camera coords
+    Xc = (cx_pix - cx) * (Z_fused / fx)
+    Yc = (cy_pix - cy) * (Z_fused / fy)
+    Zc = float(Z_fused)
+
+    # Map camera coords to robot planar coords (assume camera aligned): robot_x forward = Z, robot_y left = -X
+    r_x = Zc
+    r_y = -Xc
+
+    rx, ry, rth = float(robot_pose[0]), float(robot_pose[1]), float(robot_pose[2])
+    c, s = np.cos(rth), np.sin(rth)
+    world_x = rx + c * r_x - s * r_y
+    world_y = ry + s * r_x + c * r_y
+
+    return {'x': float(world_x), 'y': float(world_y)}
+
+
+def merge_estimations(target_pose_dict, dist_thresh=0.25, max_per_type=3):
+    """Greedy clustering per-class. Input: {label: [(x,y), ...], ...}
+    Returns dict mapping label_index -> {'x':..., 'y':...}
+    """
+    out = {}
+    for label, pts in target_pose_dict.items():
+        pts = [tuple(p) for p in pts]
+        clusters = []  # each cluster is list of pts
+        for p in pts:
+            placed = False
+            for cl in clusters:
+                # dist to cluster centroid
+                cx = sum(q[0] for q in cl) / len(cl)
+                cy = sum(q[1] for q in cl) / len(cl)
+                if ( (p[0]-cx)**2 + (p[1]-cy)**2 )**0.5 <= dist_thresh:
+                    cl.append(p)
+                    placed = True
+                    break
+            if not placed:
+                clusters.append([p])
+
+        # average clusters and cap
+        clusters = sorted(clusters, key=lambda c: -len(c))[:max_per_type]
+        for i, cl in enumerate(clusters):
+            cx = sum(q[0] for q in cl) / len(cl)
+            cy = sum(q[1] for q in cl) / len(cl)
+            out[f"{label}_{i}"] = {'x': float(cx), 'y': float(cy)}
+
+    return out
+
+
+class LiveTargetEstimator(threading.Thread):
+    def __init__(self, yolo_model_path, get_image_fn, get_pose_fn, camera_matrix, use_fusion=False, cam_height_m=0.20, cam_pitch_rad=0.0, fps=4):
+        super().__init__(daemon=True)
+        self._model_path = yolo_model_path
+        self.get_image_fn = get_image_fn
+        self.get_pose_fn = get_pose_fn
+        self.camera_matrix = camera_matrix
+        self.use_fusion = use_fusion
+        self.cam_height_m = cam_height_m
+        self.cam_pitch_rad = cam_pitch_rad
+        self.fps = fps
+        self._stop_event = threading.Event()
+        self._lock = threading.Lock()
+        self._per_class = defaultdict(lambda: deque(maxlen=12))
+        self.latest = {}
+        # initialize detector (best-effort)
+        try:
+            self._detector = Detector(self._model_path)
+        except Exception:
+            # fallback: assume static method
+            self._detector = Detector
+
+    def run(self):
+        log.info("LiveTargetEstimator thread running (fusion=%s)", self.use_fusion)
+        period = 1.0 / max(1.0, float(self.fps))
+        while not self._stop_event.is_set():
+            t0 = time.time()
+            try:
+                img = self.get_image_fn()
+                if img is None:
+                    time.sleep(period)
+                    continue
+
+                # Detector may return (detections, annotated_img) or detections only
+                try:
+                    dets = self._detector.detect_single_image(img)
+                except Exception:
+                    # try as instance method
+                    dets = self._detector.detect_single_image(img)
+
+                # Handle various return shapes
+                if isinstance(dets, tuple) or isinstance(dets, list) and len(dets) >= 2 and isinstance(dets[0], list):
+                    # common patterns: (detections, img) or detections list
+                    if isinstance(dets[0], list):
+                        detections = dets[0]
+                    else:
+                        detections = dets
+                else:
+                    detections = dets
+
+                pose = self.get_pose_fn()
+                per_class_tmp = defaultdict(list)
+                for det in detections:
+                    try:
+                        label = det[0]
+                        bbox = det[1]
+                    except Exception:
+                        continue
+                    if label not in TARGET_TYPES:
+                        continue
+                    est = estimate_pose(self.camera_matrix, (label, bbox), pose, use_fusion=self.use_fusion, cam_height_m=self.cam_height_m, cam_pitch_rad=self.cam_pitch_rad)
+                    if est is None:
+                        continue
+                    per_class_tmp[label].append((est['x'], est['y']))
+
+                # append to deques
+                for lab, lst in per_class_tmp.items():
+                    for p in lst:
+                        self._per_class[lab].append(p)
+
+                # merge and store latest
+                agg_in = {lab: list(self._per_class[lab]) for lab in self._per_class}
+                merged = merge_estimations(agg_in)
+                with self._lock:
+                    self.latest = merged
+
+            except Exception:
+                log.exception("LiveTargetEstimator loop error")
+
+            # sleep remainder
+            dt = time.time() - t0
+            if dt < period:
+                time.sleep(period - dt)
+
+        log.info("LiveTargetEstimator thread exiting")
+
+    def get_latest(self):
+        with self._lock:
+            return dict(self.latest)
+
+    def stop(self):
+        self._stop_event.set()
+
 # main loop
 if __name__ == "__main__":
     parser = argparse.ArgumentParser("Fruit searching")
@@ -260,6 +474,8 @@ if __name__ == "__main__":
     parser.add_argument("--no_run", action='store_true', help='Only load map, world model, and occupancy grid; do not start autonomy')
     parser.add_argument("--log", type=str, default='INFO', choices=['DEBUG','INFO','WARNING','ERROR','CRITICAL'], help='Logging level')
     parser.add_argument("--level", type=int, default=1)
+    parser.add_argument("--use_fusion", action='store_true',
+                        help="Fuse bbox-height with bottom-pixel ground-ray for fruit range")
     args, _ = parser.parse_known_args()
 
     # Configure root logging early
@@ -303,6 +519,36 @@ if __name__ == "__main__":
     aruco_det = aruco.aruco_detector(ekf.robot, marker_length=0.07)
     log.info("ArUco detector initialised (marker_length=0.07)")
 
+    # Start live target estimator
+    try:
+        camK = ekf.robot.camera_matrix
+    except Exception:
+        camK = None
+
+    yolo_model_path = os.path.join(os.getcwd(), "YOLO", "model", "yolov8_model.pt")
+
+    def _get_image():
+        try:
+            return ppi.get_image()
+        except Exception:
+            return None
+
+    def _get_pose_for_est():
+        return get_robot_pose(ppi, aruco_det, ekf)
+
+    live_estimator = LiveTargetEstimator(
+        yolo_model_path=yolo_model_path,
+        get_image_fn=_get_image,
+        get_pose_fn=_get_pose_for_est,
+        camera_matrix=camK,
+        use_fusion=args.use_fusion,
+        cam_height_m=0.20,
+        cam_pitch_rad=0.0,
+        fps=4
+    )
+    live_estimator.start()
+    log.info("LiveTargetEstimator started (fusion=%s)", args.use_fusion)
+
     # Interactive OG viewer (PyGame) always enabled. Closing window ends program.
     def _get_pose():
         # In dry-run mode (no_run or localhost), keep pose at origin; otherwise query EKF
@@ -327,4 +573,19 @@ if __name__ == "__main__":
     log.info("Launching OGViewer GUI")
     viewer.run()
     log.info("OGViewer closed; exiting program")
+    # Persist live estimates and stop estimator
+    try:
+        latest = live_estimator.get_latest()
+        if latest:
+            out_path = os.path.join(os.getcwd(), "lab_output", "targets_live.txt")
+            os.makedirs(os.path.dirname(out_path), exist_ok=True)
+            with open(out_path, "w") as fo:
+                json.dump(latest, fo, indent=2)
+            log.info("Saved live target estimates to %s", out_path)
+    finally:
+        try:
+            live_estimator.stop()
+        except Exception:
+            pass
+
     sys.exit(0)
