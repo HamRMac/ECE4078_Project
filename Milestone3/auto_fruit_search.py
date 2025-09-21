@@ -33,6 +33,10 @@ from planning.grid_map import GridMap
 
 # Import state machine
 from state_machine.state_machine import PiBotFruitSearchSM
+from runtime.world_model import WorldModel
+from runtime.robot_commander import RobotCommander
+from runtime.runner import Runner
+from runtime.intents import SetGoal
 
 # Module logger
 log = logging.getLogger(__name__)
@@ -504,6 +508,7 @@ def _parse_args():
     parser.add_argument("--model", type=str, default='', help='YOLO model path (optional)')
     parser.add_argument("--use_fusion", action='store_true', help='Fuse bbox-height with bottom-pixel ground-ray for fruit range')
     parser.add_argument("--level", type=int, default=1)
+    parser.add_argument("--interactive_gui", action='store_true', help='Allow GUI clicks to set manual goals (Runner executes)')
     return parser.parse_known_args()
 
 
@@ -609,28 +614,6 @@ def _load_target_fruits_dict(list_path: str):
     return targets
 
 
-def _create_gui(args, gridMapInstance, yoloDetectorInstance, fruitRangerInstance, penguinpiInstance,
-                stateMachineInstance, _get_pose, aruco_true_pos_id, target_dims_Dict):
-    # Note: state_machine is passed through to GUI here to preserve current behaviour,
-    # even though the GUI may not consume it.
-    return PiBotGUI(
-        grid=gridMapInstance,
-        planner=AStarPlanner(),
-        detector=yoloDetectorInstance,
-        fruit_ranger=fruitRangerInstance,
-        ppi=penguinpiInstance,
-        state_machine=stateMachineInstance,  # kept for compatibility with current call site
-        get_pose_fn=_get_pose,
-        get_frame_fn=penguinpiInstance.get_image,
-        window_scale=4,
-        fps=15,
-        controller_kind=args.controller,
-        dry_run=(args.no_run or args.ip == 'localhost'),
-        ARUCO_locations=aruco_true_pos_id,
-        target_dims=target_dims_Dict,
-    )
-
-
 def main():
     args, _ = _parse_args()
     _configure_logging(args.log)
@@ -665,12 +648,68 @@ def main():
     stateMachineInstance = _init_state_machine()
     _ = _load_target_fruits_dict("ECE4078_Project/Milestone3/M3_prac_shopping_list.txt")
 
-    # 9) GUI
-    guiInstance = _create_gui(args, gridMapInstance, yoloDetectorInstance, fruitRangerInstance,
-                              penguinpiInstance, stateMachineInstance, _get_pose,
-                              aruco_true_pos_id, target_dims_Dict)
-    log.info("Launching PiBotGUI")
-    guiInstance.run()
+    # 9) Runtime wiring: WorldModel, Runner, GUI
+    from queue import Queue
+    world = WorldModel()
+    intents_q: Queue = Queue()
+    commander = RobotCommander(penguinpiInstance)
+
+    # Runner pose function is same EKF-based callback
+    runner = Runner(commander=commander,
+                    ekf=ekfInstance,
+                    aruco_det=aruco_det,
+                    grid=gridMapInstance,
+                    planner=AStarPlanner(clearance_weight=0.6, clearance_power=2.0, clearance_epsilon=0.02*0.5, min_prune_clearance=0.10),
+                    world=world,
+                    get_pose_fn=_get_pose,
+                    intents_q=intents_q,
+                    controller_kind=args.controller,
+                    hz=10.0,
+                    drive_enabled=not (args.no_run or args.ip == 'localhost'))
+    runner.start()
+
+    # Providers for GUI (display-only)
+    def _plan_provider():
+        return world.get_plan()
+
+    def _status_provider():
+        return world.get_status()
+
+    # Intent sink from GUI clicks (wrap to SetGoal)
+    def _intent_sink(gx: float, gy: float):
+        intents_q.put(SetGoal(gx, gy))
+
+    guiInstance = PiBotGUI(
+        grid=gridMapInstance,
+        ppi=penguinpiInstance,
+        planner=AStarPlanner(),
+        state_machine=stateMachineInstance,
+        detector=yoloDetectorInstance,
+        fruit_ranger=fruitRangerInstance,
+        controller_kind=args.controller,
+        get_pose_fn=_get_pose,
+        get_frame_fn=penguinpiInstance.get_image,
+        window_scale=4,
+        fps=15,
+        dry_run=True,  # GUI never controls motors
+        ARUCO_locations=aruco_true_pos_id,
+        target_dims=target_dims_Dict,
+        interactive=bool(args.interactive_gui),
+        intent_sink=_intent_sink if args.interactive_gui else None,
+        plan_provider=_plan_provider,
+        status_provider=_status_provider,
+    )
+
+    log.info("Launching PiBotGUI (display-only)")
+    try:
+        guiInstance.run()
+    finally:
+        log.info("Shutting down runner and stopping robot")
+        try:
+            runner.stop()
+            runner.join(timeout=2.0)
+        except Exception:
+            pass
     log.info("PiBotGUI closed; exiting program")
 
 

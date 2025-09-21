@@ -30,11 +30,31 @@ class AStarPlanner:
     """A* planner over GridMap with 8-connectivity and Euclidean heuristic.
 
     - Occupied if grid value > occ_th (treat any value > occ_th as blocked).
+    - Optional clearance-aware costs to bias paths away from obstacles.
     - Returns both raw grid path and pruned world waypoints (line-of-sight pruning).
     """
 
-    def __init__(self, occupancy_threshold: int = 0):
+    def __init__(self, occupancy_threshold: int = 0,
+                 clearance_weight: float = 0.0,
+                 clearance_epsilon: float = 0.02,
+                 clearance_power: float = 1.0,
+                 min_prune_clearance: float = 0.0):
+        """
+        Parameters
+        - occupancy_threshold: cells with value > occ_th are blocked
+        - clearance_weight: 0.0 disables clearance bias (original behavior).
+          Positive values increase the penalty for low-clearance cells.
+        - clearance_epsilon: metres used to bound the inverse-clearance penalty.
+        - clearance_power: exponent on the inverse-clearance term; >1 sharpens
+          the penalty near obstacles.
+        - min_prune_clearance: metres required along each pruned LOS segment.
+          0.0 disables clearance checks during pruning.
+        """
         self.occ_th = int(occupancy_threshold)
+        self.clear_w = float(clearance_weight)
+        self.clear_eps = float(clearance_epsilon)
+        self.clear_pow = float(clearance_power)
+        self.min_prune_clear = float(min_prune_clearance)
 
     # --------------- Core A* ---------------
     @staticmethod
@@ -77,6 +97,14 @@ class AStarPlanner:
         s = grid.world_to_grid(*start_xy)
         g = grid.world_to_grid(*goal_xy)
 
+        # Optional clearance map (metres); None when disabled
+        clearance = None
+        if self.clear_w > 0.0:
+            try:
+                clearance = grid.clearance_map()
+            except Exception:
+                clearance = None  # fail-safe to original costs
+
         # Basic validity checks
         if not (0 <= s[0] < H and 0 <= s[1] < W and 0 <= g[0] < H and 0 <= g[1] < W):
             log.warning("A*: start or goal out of bounds s=%s g=%s size=(%d,%d)", str(s), str(g), H, W)
@@ -112,10 +140,21 @@ class AStarPlanner:
             for nb, step_cost in self._neighbors(H, W, current):
                 if not self._is_free(occ, nb) or nb in closed:
                     continue
-                tentative = g_curr + step_cost
+                # Optionally scale step cost based on clearance at neighbor cell
+                step = step_cost
+                if clearance is not None:
+                    try:
+                        cl = float(clearance[nb[0], nb[1]])
+                        inv = 1.0 / max(self.clear_eps, cl)
+                        penalty = 1.0 + self.clear_w * (inv ** max(1.0, self.clear_pow))
+                        step *= penalty
+                    except Exception:
+                        pass
+                tentative = g_curr + step
                 if tentative < g_score.get(nb, float("inf")):
                     came_from[nb] = current
                     g_score[nb] = tentative
+                    # Heuristic remains plain Euclidean for admissibility
                     f = tentative + self._heuristic(nb, g)
                     heapq.heappush(open_heap, (f, tentative, nb))
 
@@ -174,11 +213,25 @@ class AStarPlanner:
             return []
         log.debug("Pruning path of length %d", len(path_grid))
         occ = grid.combined()
+        # Clearance map optionally used to ensure minimum clearance on LOS segments
+        clr = None
+        if self.min_prune_clear > 0.0:
+            try:
+                clr = grid.clearance_map()
+            except Exception:
+                clr = None
         pruned: List[Coord] = [path_grid[0]]
         anchor = path_grid[0]
         for i in range(1, len(path_grid)):
             nxt = path_grid[i]
-            if not self.line_free(occ, anchor, nxt):
+            los_ok = self.line_free(occ, anchor, nxt)
+            if los_ok and clr is not None:
+                # Enforce minimum clearance along the supercover line
+                for r, c in self._supercover_line(anchor, nxt):
+                    if float(clr[r, c]) < self.min_prune_clear:
+                        los_ok = False
+                        break
+            if not los_ok:
                 prev = path_grid[i - 1]
                 if prev != pruned[-1]:
                     pruned.append(prev)

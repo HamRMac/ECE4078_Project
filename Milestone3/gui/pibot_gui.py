@@ -60,6 +60,12 @@ class PiBotGUI:
         dry_run: bool = False,
         ARUCO_locations: np.ndarray = None,
         target_dims: Optional[dict] = None,
+        # Display-only hooks
+        interactive: bool = False,
+        intent_sink=None,
+        plan_provider=None,
+        detections_provider=None,
+        status_provider=None,
     ) -> None:
         """
         Parameters
@@ -86,6 +92,12 @@ class PiBotGUI:
         self.detector = detector
         self.fruit_ranger = fruit_ranger
         self.target_dims = target_dims or {}
+        # Display-only providers / intents
+        self.interactive = bool(interactive)
+        self.intent_sink = intent_sink
+        self.plan_provider = plan_provider
+        self.detections_provider = detections_provider
+        self.status_provider = status_provider
 
         # Interactive state
         self.goal_xy: Optional[Tuple[float, float]] = None
@@ -130,8 +142,22 @@ class PiBotGUI:
             r_g, c_g = self.grid.world_to_grid(*self.goal_xy)
             cv2.circle(vis_bgr, (int(c_g * self.scale), int(r_g * self.scale)), 5, (0, 0, 220), -1)
 
-        # Draw last planned path in blue (if available)
-        if self.last_plan is not None and self.last_plan.path_grid:
+        # Draw provided plan (preferred) or last planned path
+        drew_provider = False
+        if callable(self.plan_provider):
+            try:
+                plan = self.plan_provider() or None
+            except Exception:
+                plan = None
+            if isinstance(plan, dict) and plan.get('waypoints'):
+                pts = []
+                for (wx, wy) in plan['waypoints']:
+                    r_p, c_p = self.grid.world_to_grid(float(wx), float(wy))
+                    pts.append([int(c_p * self.scale), int(r_p * self.scale)])
+                if len(pts) >= 2:
+                    cv2.polylines(vis_bgr, [np.array(pts, dtype=np.int32)], isClosed=False, color=(50, 120, 225), thickness=2)
+                    drew_provider = True
+        if not drew_provider and self.last_plan is not None and self.last_plan.path_grid:
             pts = np.array([[int(c * self.scale), int(r * self.scale)] for (r, c) in self.last_plan.path_grid], dtype=np.int32)
             if len(pts) >= 2:
                 cv2.polylines(vis_bgr, [pts], isClosed=False, color=(255, 0, 0), thickness=2)
@@ -182,6 +208,16 @@ class PiBotGUI:
                         roi[:] = icon_crop
         except Exception as e:
             log.debug("ARUCO sprite overlay failed: %s", e)
+
+        # Status overlay (mode / SM state / action)
+        try:
+            if callable(self.status_provider):
+                st = self.status_provider() or {}
+                txt = f"Mode:{st.get('mode','')} SM:{st.get('sm_state','')} Act:{st.get('action','')} {st.get('progress','')}"
+                cv2.putText(vis_bgr, txt, (8, 16), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 0, 0), 2, cv2.LINE_AA)
+                cv2.putText(vis_bgr, txt, (8, 16), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1, cv2.LINE_AA)
+        except Exception:
+            pass
 
         # Convert BGR numpy image to PyGame surface and blit
         vis_rgb = cv2.cvtColor(vis_bgr, cv2.COLOR_BGR2RGB)
@@ -266,21 +302,26 @@ class PiBotGUI:
                     running = False
                 elif event.type == pygame.KEYDOWN and event.key == pygame.K_d:
                     pdb.set_trace()
-                elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-                    # Left-click sets goal and triggers replan
+                elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1 and self.interactive:
+                    # Left-click: emit intent if sink provided; else plan locally as before
                     mx, my = pygame.mouse.get_pos()
                     gx, gy = self._pixel_to_world(mx, my)
-                    self.goal_xy = (gx, gy)
                     log.info("Mouse click -> goal=(%.3f, %.3f)", gx, gy)
-                    # Use current pose as start
-                    pose = [0.0, 0.0, 0.0]
-                    if callable(self.get_pose_fn):
+                    if callable(self.intent_sink):
                         try:
-                            pose = self.get_pose_fn()
+                            self.intent_sink(gx, gy)
                         except Exception:
                             pass
-                    start_xy = (float(pose[0]), float(pose[1]))
-                    self._replan(start_xy, self.goal_xy)
+                    else:
+                        self.goal_xy = (gx, gy)
+                        pose = [0.0, 0.0, 0.0]
+                        if callable(self.get_pose_fn):
+                            try:
+                                pose = self.get_pose_fn()
+                            except Exception:
+                                pass
+                        start_xy = (float(pose[0]), float(pose[1]))
+                        self._replan(start_xy, self.goal_xy)
 
             # Draw overlays on OG and update display
             self._surface.fill((0, 0, 0))

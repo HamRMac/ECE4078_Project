@@ -49,6 +49,9 @@ class GridMap:
         self.static_layer: Optional[np.ndarray] = None
         self.dynamic_layer: Optional[np.ndarray] = None
 
+        # Cached clearance map (metres) computed from combined occupancy
+        self._clearance_cache: Optional[np.ndarray] = None
+
     # ---------------- Coordinates ----------------
     def world_to_grid(self, x: float, y: float) -> Tuple[int, int]:
         """
@@ -124,6 +127,9 @@ class GridMap:
         self.static_layer = np.zeros((H, W), dtype=np.uint8)
         self.dynamic_layer = np.zeros((H, W), dtype=np.uint8)
 
+        # Invalidate clearance cache
+        self._clearance_cache = None
+
         # Inflate radius in metres: enclosing disc for marker square + robot + margin
         # base_r = s / sqrt(2) = 0.5 * sqrt(2) * s
         base_r = 0.5 * math.sqrt(2.0) * float(aruco_cube_size)
@@ -150,10 +156,33 @@ class GridMap:
         r, c = self.world_to_grid(x, y)
         rc = max(1, int(math.ceil(radius / self.res)))
         cv2.circle(self.dynamic_layer, (c, r), rc, color=255, thickness=-1)
+        # Invalidate clearance cache
+        self._clearance_cache = None
 
     def combined(self) -> np.ndarray:
         assert self.static_layer is not None and self.dynamic_layer is not None, "Grid not built yet."
         return np.maximum(self.static_layer, self.dynamic_layer)
+
+    # ---------------- Clearance ----------------
+    def clearance_map(self) -> np.ndarray:
+        """Return a cached array of obstacle clearance in metres for each free cell.
+
+        Implementation: Euclidean distance transform on the binary free-space mask
+        using OpenCV. Free cells store their distance (in metres) to the nearest
+        occupied cell. Occupied cells have 0 distance.
+        """
+        if self._clearance_cache is not None:
+            return self._clearance_cache
+
+        occ = self.combined()
+        # Free mask: non-zero foreground for cv2.distanceTransform
+        free_mask = (occ == 0).astype(np.uint8)
+        # Distance in cells to nearest obstacle (zero pixel)
+        dist_cells = cv2.distanceTransform(free_mask, cv2.DIST_L2, 3)
+        # Convert to metres
+        clearance_m = dist_cells * float(self.res)
+        self._clearance_cache = clearance_m
+        return self._clearance_cache
 
     # ---------------- Visualisation ----------------
     def render(self, scale: int = 3) -> np.ndarray:
