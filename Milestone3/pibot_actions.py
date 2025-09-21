@@ -250,3 +250,130 @@ class PiBotActions:
         except Exception as e:
             log.warning("scan: clustering failed: %s", e)
             self.current_obj_positions = []
+    
+    def approach_fruit(self,
+                        angle_deg: float,
+                        distance_m: float,
+                        turning_tick: int = 25,
+                        forward_tick: int = 50) -> None:
+        """Rotate to target direction and move forward by distance_m at given forward_tick speed. 
+            Angle_deg should be from the robot's current heading.(i.e. relative angle)
+
+        - distance_m: distance to move in meters (positive).
+        - forward_tick: tick value for forward motion (affects speed).
+        """
+        try:
+            dist = abs(float(distance_m))
+        except Exception:
+            dist = 0.0
+
+        if dist < 0.01:
+            log.info("approach_fruit: requested distance %.3f m < 0.01 m. No movement.", dist)
+            return
+
+        try:
+            angle = float(angle_deg)
+        except Exception:
+            angle = 0.0
+
+        if angle != 0.0:
+            log.info("approach_fruit: rotating to angle %.1f°", angle)
+            self.ppi.set_velocity([0, 0], turning_tick=turning_tick)
+
+
+
+        # rotate to face target direction first
+        if angle != 0.0:
+            duration = self._turn_time_for_angle(angle, turning_tick)
+            try:
+                self.ppi.set_velocity([0, 1 if angle > 0 else -1], turning_tick=turning_tick, time=duration)
+            except Exception as e:
+                log.warning("approach_fruit: set_velocity failed during turn: %s", e)
+                # attempt to continue
+
+        try:
+            tick = int(forward_tick)
+        except Exception:
+            tick = 50
+
+        if tick < 10:
+            log.info("approach_fruit: requested forward_tick %d < 10. Using 10.", tick)
+            tick = 10
+
+        # Compute time to move the requested distance at given speed
+        v = self.scale * float(tick)  # m/s
+        duration = dist / max(1e-6, v)
+        log.info("approach_fruit: moving forward %.3f m at tick=%d (v=%.3f m/s) for %.2f s",
+                 dist, tick, v, duration)
+
+        try:
+            self.ppi.set_velocity([1, 0], forward_tick=tick, time=duration)
+        except Exception as e:
+            log.warning("approach_fruit: set_velocity failed: %s", e)
+
+        # Ensure motors are stopped
+        try:
+            self.ppi.set_velocity([0, 0])
+        except Exception:
+            pass
+
+    def collect_fruit(self,
+                      collection_class: str = "default",
+                      duration_s: float = 2.1) -> None:
+        """Sit next to fruit to collect for duration_s seconds. Prints fruit collected message in gui"""
+        try:
+            dur = max(0.1, float(duration_s))
+        except Exception:
+            dur = 2.1
+
+        log.info("collect_fruit: activating collector for %.1f s", dur)
+        try:
+            time.sleep(dur)
+            # print fruit collected message in gui
+            self.ppi.collect_fruit(collection_class) # i dont know what this does
+        except Exception as e:
+            log.warning("collect_fruit: collector activation failed: %s", e)
+
+
+    def return_to_scan_point(self,
+                             distance_m: float,
+                             forward_tick: int = 50) -> None:
+        """Move backwards by distance_m at given forward_tick speed.
+
+        - distance_m: distance to move in meters (positive).
+        - forward_tick: tick value for backward motion (affects speed).
+        """
+        try:
+            dist = abs(float(distance_m))
+        except Exception:
+            dist = 0.0
+
+        if dist < 0.01:
+            log.info("return_to_scan_point: requested distance %.3f m < 0.01 m. No movement.", dist)
+            return
+
+        try:
+            tick = int(forward_tick)
+        except Exception:
+            tick = 50
+
+        if tick < 10:
+            log.info("return_to_scan_point: requested forward_tick %d < 10. Using 10.", tick)
+            tick = 10
+
+        # Compute time to move the requested distance at given speed
+        v = self.scale * float(tick)  # m/s
+        duration = dist / max(1e-6, v)
+        log.info("return_to_scan_point: moving backward %.3f m at tick=%d (v=%.3f m/s) for %.2f s",
+                 dist, tick, v, duration)
+
+        try:
+            self.ppi.set_velocity([-1, 0], forward_tick=tick, time=duration)
+        except Exception as e:
+            log.warning("return_to_scan_point: set_velocity failed: %s", e)
+
+        # Ensure motors are stopped
+        try:
+            self.ppi.set_velocity([0, 0])
+        except Exception:
+            pass
