@@ -523,7 +523,7 @@ def _configure_logging(level: str):
             root.removeHandler(h)
 
     root.setLevel(getattr(logging, (level or 'INFO').upper(), logging.INFO))
-    fmt = '[%(levelname)s] %(name)s: %(message)s'
+    fmt = '[%(levelname)s] [%(threadName)s] %(name)s: %(message)s'
     handler = logging.StreamHandler()
     handler.setFormatter(_ColoredFormatter(fmt, use_color=use_color))
     root.addHandler(handler)
@@ -648,13 +648,15 @@ def main():
     stateMachineInstance = _init_state_machine()
     _ = _load_target_fruits_dict("ECE4078_Project/Milestone3/M3_prac_shopping_list.txt")
 
-    # 9) Runtime wiring: WorldModel, Runner, GUI
+    # 9) Runtime wiring: WorldModel, Runner, (optional) SMRunner, GUI
     from queue import Queue
     world = WorldModel()
     intents_q: Queue = Queue()
     commander = RobotCommander(penguinpiInstance)
 
     # Runner pose function is same EKF-based callback
+    from pibot_actions import PiBotActions
+    actions = PiBotActions(penguinpiInstance, calib_dir=args.calib_dir)
     runner = Runner(commander=commander,
                     ekf=ekfInstance,
                     aruco_det=aruco_det,
@@ -665,7 +667,12 @@ def main():
                     intents_q=intents_q,
                     controller_kind=args.controller,
                     hz=10.0,
-                    drive_enabled=not (args.no_run or args.ip == 'localhost'))
+                    drive_enabled=not (args.no_run or args.ip == 'localhost'),
+                    state_machine=stateMachineInstance,
+                    actions=actions,
+                    detector=yoloDetectorInstance,
+                    fruit_ranger=fruitRangerInstance,
+                    target_dims=target_dims_Dict)
     runner.start()
 
     # Providers for GUI (display-only)

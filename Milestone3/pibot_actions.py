@@ -59,12 +59,12 @@ class PiBotActions:
 
     def scan(self,
              step_angle_deg: float,
+             detector: Detector,
+             fruit_ranger: FruitRanger,
+             target_dims: Dict[str, Tuple[float, float, float]],
+             get_pose_fn: Callable[[], List[float]],
              turning_tick: int = 25,
              pause_s: float = 1.0,
-             detector: Optional[Detector] = None,
-             fruit_ranger: Optional[FruitRanger] = None,
-             target_dims: Optional[Dict[str, Tuple[float, float, float]]] = None,
-             get_pose_fn: Optional[Callable[[], List[float]]] = None,
              edge_margin_frac: float = 0.05) -> None:
         """Rotate on the spot in increments until a full 360° scan is done.
 
@@ -72,6 +72,11 @@ class PiBotActions:
         - turning_tick: tick value used for turning (affects speed).
         - pause_s: pause between steps to allow sensing.
         """
+        # Validate we have values for all parameters
+        if not all([detector, fruit_ranger, target_dims, get_pose_fn]):
+            log.error("scan: missing required parameters.")
+            return
+
         # ------------------------------
         # 1) Normalize inputs and guards
         # ------------------------------

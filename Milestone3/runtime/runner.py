@@ -1,5 +1,6 @@
 import threading
 import time
+import logging
 from typing import Optional, Tuple, List
 
 from navigation.controller import ControllerManager
@@ -7,6 +8,10 @@ from planning.astar import AStarPlanner
 from planning.grid_map import GridMap
 from .world_model import WorldModel
 from .robot_commander import RobotCommander
+from state_machine.state_machine import PiBotFruitSearchSM
+from pibot_actions import PiBotActions
+
+log = logging.getLogger(__name__)
 
 
 class Runner(threading.Thread):
@@ -22,8 +27,13 @@ class Runner(threading.Thread):
                  intents_q,
                  controller_kind: str = "ttg",
                  hz: float = 10.0,
-                 drive_enabled: bool = True):
-        super().__init__(daemon=True)
+                 drive_enabled: bool = True,
+                 state_machine: PiBotFruitSearchSM = None,
+                 actions: PiBotActions=None,
+                 detector=None,
+                 fruit_ranger=None,
+                 target_dims=None):
+        super().__init__(daemon=True, name="Runner")
         self.cmd = commander
         self.ekf = ekf
         self.aruco = aruco_det
@@ -35,13 +45,18 @@ class Runner(threading.Thread):
         self.ctrl = ControllerManager(controller_kind)
         self._stop = threading.Event()
         self._drive_enabled = bool(drive_enabled)
+        self.sm = state_machine
+        self.actions = actions
+        self.detector = detector
+        self.fruit_ranger = fruit_ranger
+        self.target_dims = target_dims
         self._goal: Optional[Tuple[float, float]] = None
         self._plan_waypoints: List[Tuple[float, float]] = []
         self._wp_idx: int = 0
         self._period = 1.0 / max(1.0, float(hz))
 
         # modes: 'IDLE' | 'MANUAL_WAYPOINTS' | 'AUTO'
-        self.mode = 'IDLE'
+        self.mode = 'AUTO' if self.sm is not None else 'IDLE'
 
     def stop(self):
         self._stop.set()
@@ -77,16 +92,19 @@ class Runner(threading.Thread):
         pose = self.get_pose_fn()
         if self._goal is None:
             return
+        log.info("Planning to goal (%.2f, %.2f)", self._goal[0], self._goal[1])
         pr = self.planner.plan(self.grid, (pose[0], pose[1]), self._goal)
         if pr is None:
             self._plan_waypoints = []
             self.world.clear_plan()
             self.world.set_status(action='plan_failed')
+            log.warning("Plan failed to goal (%.2f, %.2f)", self._goal[0], self._goal[1])
             return
         self._plan_waypoints = list(pr.pruned_world if pr.pruned_world else pr.path_world)
         self._wp_idx = 0
         self.world.set_plan(self._plan_waypoints, active_idx=self._wp_idx)
         self.world.set_status(action='drive', progress=f"0/{len(self._plan_waypoints)}")
+        log.info("Plan OK: %d waypoints (pruned=%s)", len(self._plan_waypoints), "yes" if pr.pruned_world else "no")
 
     def _drive_step(self, pose):
         if not self._plan_waypoints:
@@ -99,17 +117,97 @@ class Runner(threading.Thread):
         else:
             # Reflect disabled driving in status; no velocity command sent
             self.world.set_status(action='drive_disabled')
+        log.debug("drive_step: wp_idx=%d/%d cmd=(%d,%d) ticks=(%d,%d)", self._wp_idx, max(0, len(self._plan_waypoints)-1), fwd_cmd, turn_cmd, fwd_tick, turn_tick)
         if done:
             if self._wp_idx < len(self._plan_waypoints) - 1:
                 self._wp_idx += 1
                 self.world.set_plan(self._plan_waypoints, active_idx=self._wp_idx)
                 self.world.set_status(progress=f"{self._wp_idx}/{len(self._plan_waypoints)-1}")
+                log.debug("Reached waypoint; advancing to %d", self._wp_idx)
             else:
                 self.cmd.stop()
                 self.world.set_status(action='arrived')
                 self._plan_waypoints = []
                 self.world.clear_plan()
-                self.mode = 'IDLE'
+                # Only drop to IDLE if in manual mode; in AUTO, let SM decide next step
+                if self.mode == 'MANUAL_WAYPOINTS':
+                    self.mode = 'IDLE'
+                log.info("Arrived at goal.")
+
+    # ---------------- AUTO (SM-driven) ----------------
+    def _auto_step(self, pose):
+        if self.sm is None:
+            return
+        try:
+            sm_state = self.sm.current_state.id.lower()
+            log.debug("SM state: %s", sm_state)
+        except Exception:
+            sm_state = 'scan'
+        
+        # EXECUTES IN STATE "Scan"
+        if sm_state == 'scan':
+            # Call PiBotActions.scan if allowed; otherwise simulate dwell
+            self.world.set_status(mode='AUTO', sm_state='scan', action='scan')
+            log.info("SM: Scan → scan action")
+            if self.actions is not None and self._drive_enabled:
+                try:
+                    # conservative scan parameters; pass detector/ranger/target_dims if available
+                    self.actions.scan(
+                        step_angle_deg=20.0,
+                        detector=self.detector,
+                        fruit_ranger=self.fruit_ranger,
+                        target_dims=self.target_dims,
+                        get_pose_fn=self.get_pose_fn,
+                        turning_tick=25,
+                        pause_s=0.3,
+                    )
+                    # Publish detections (clustered) to world model if available
+                    try:
+                        dets = getattr(self.actions, 'current_obj_positions', []) or []
+                        self.world.set_detections(dets)
+                        log.info("Scan complete: %d clustered objects", len(dets))
+                    except Exception:
+                        pass
+                except Exception:
+                    pass
+            else:
+                log.info("Scan disabled (drive off). Sleeping for 0.5 seconds")
+                time.sleep(0.5)
+            # Transition to next state
+            try:
+                self.sm.T_scan_to_calculate_next_safe_point()
+            except Exception:
+                pass
+        
+        # EXECUTES IN STATE "CalculateNextSafePoint"
+        elif sm_state == 'calculate_next_safe_point':
+            # Placeholder: choose (1,0)
+            self.world.set_status(mode='AUTO', sm_state='calculate_next_safe_point', action='choose_safe_point')
+            log.info("SM: CalculateNextSafePoint → planning to (1.2, 1.1)")
+            self._goal = (1.2, 1.1)
+            # plan now from current pose
+            self._plan_from_current()
+            try:
+                self.sm.T_calculate_next_safe_point_to_navigate_to_safe_point()
+            except Exception:
+                pass
+        
+        # EXECUTES IN STATE "NavigateToSafePoint"
+        elif sm_state == 'navigate_to_safe_point':
+            self.world.set_status(mode='AUTO', sm_state='navigate_to_safe_point', action='begin_drive')
+            # If we have a plan, drive a step; otherwise consider arrival
+            if self._plan_waypoints:
+                self._drive_step(pose)
+            else:
+                # arrived or cannot plan; go back to spin
+                log.info("SM: NavigateToSafePoint → Scan")
+                try:
+                    self.sm.T_navigate_to_safe_point_to_scan()
+                except Exception:
+                    pass
+        else:
+            # Other states not yet implemented
+            self.world.set_status(mode='AUTO', sm_state=sm_state, action='idle')
 
     def run(self):
         while not self._stop.is_set():
@@ -120,8 +218,11 @@ class Runner(threading.Thread):
             pose = self.get_pose_fn()
             self.world.set_pose(pose)
             # 3) control
-            if self.mode == 'MANUAL_WAYPOINTS' and self._plan_waypoints:
-                self._drive_step(pose)
+            if self.mode == 'MANUAL_WAYPOINTS':
+                if self._plan_waypoints:
+                    self._drive_step(pose)
+            elif self.mode == 'AUTO':
+                self._auto_step(pose)
             # 4) sleep remainder
             dt = time.time() - t0
             if dt < self._period:
