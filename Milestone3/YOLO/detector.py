@@ -13,6 +13,7 @@ class Detector:
                  ):
         self.model = YOLO(model_path)
         self.imgsz = int(imgsz)
+        self.max_batch = 8
 
         self.class_colour = {
             'orange': (0, 165, 255),
@@ -56,6 +57,44 @@ class Detector:
                                   self.class_colour[bbox[0]], 2)
 
         return bboxes, img_out
+
+    def detect_batch(self, imgs: list) -> list:
+        """Detect targets in a batch of images.
+
+        Inputs:
+          - imgs: list of BGR images (np.ndarray HxWx3)
+        Outputs:
+          - results: list of tuples (bboxes, img_out) per input image, where
+              bboxes: [[label, np.array([x,y,w,h])], ...]
+              img_out: visualised image with boxes/labels drawn
+        Processes in micro-batches up to self.max_batch for efficiency.
+        """
+        if not imgs:
+            return []
+        results_all = []
+        # Process in chunks
+        for i in range(0, len(imgs), self.max_batch):
+            chunk = imgs[i:i + self.max_batch]
+            # Ultralytics can take a list of images directly
+            predictions = self.model.predict(chunk, imgsz=self.imgsz, verbose=False)
+            # predictions is a list aligned with chunk
+            for pred, src in zip(predictions, chunk):
+                boxes_out = []
+                img_out = deepcopy(src)
+                boxes = pred.boxes
+                for box in boxes:
+                    box_cord = box.xywh[0]
+                    box_label = box.cls
+                    label_str = pred.names[int(box_label)]
+                    boxes_out.append([label_str, np.asarray(box_cord)])
+                    # Draw
+                    xyxy = ops.xywh2xyxy(box_cord)
+                    x1, y1, x2, y2 = map(int, [xyxy[0], xyxy[1], xyxy[2], xyxy[3]])
+                    colour = self.class_colour.get(label_str, (200, 200, 200))
+                    img_out = cv2.rectangle(img_out, (x1, y1), (x2, y2), colour, thickness=2)
+                    img_out = cv2.putText(img_out, label_str, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, colour, 2)
+                results_all.append((boxes_out, img_out))
+        return results_all
 
     def _get_bounding_boxes(self, cv_img):
         """

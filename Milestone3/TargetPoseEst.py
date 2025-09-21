@@ -11,7 +11,6 @@ from matplotlib.ticker import MultipleLocator
 from matplotlib.offsetbox import OffsetImage, AnnotationBbox
 import matplotlib.image as mpimg
 from YOLO.detector import Detector
-from sklearn.cluster import DBSCAN
 try:
     from tqdm.auto import tqdm
 except Exception:
@@ -107,10 +106,6 @@ def plot_targets_and_markers(target_est, taglist, positions, out_path,
             ax.plot(x, y, marker='s', color='tab:blue')
         ax.text(x, y - fruit_radius - 0.02, f"LM {tag}", ha='center', va='top', fontsize=8)
 
-    ax.add_patch(plt.Rectangle((-ARENA_BOUND, -ARENA_BOUND), ARENA_SIZE, ARENA_SIZE,
-                               fill=False, linewidth=1.5, color='k', alpha=0.5))
-    os.makedirs(os.path.dirname(out_path), exist_ok=True)
-    fig.tight_layout(); fig.savefig(out_path, dpi=150); plt.close(fig)
 
 # -----------------------------
 # Legacy height-only world pose (kept for ref; not used in main)
