@@ -11,6 +11,7 @@ sys.path.insert(0, f"{os.getcwd()}/util")
 from util.pibot import PenguinPi
 from YOLO.detector import Detector
 from perception.clustering import cluster_detections_dbscan
+from perception.fruit_ranger import FruitRanger
 
 
 log = logging.getLogger(__name__)
@@ -52,7 +53,7 @@ class PiBotActions:
              turning_tick: int = 25,
              pause_s: float = 1.0,
              detector: Optional[Detector] = None,
-             fruit_ranger: Optional[object] = None,
+             fruit_ranger: Optional[FruitRanger] = None,
              target_dims: Optional[Dict[str, Tuple[float, float, float]]] = None,
              get_pose_fn: Optional[Callable[[], List[float]]] = None,
              edge_margin_frac: float = 0.05) -> None:
@@ -85,6 +86,7 @@ class PiBotActions:
         
         # ---------------------------------------------
         # 3) Rotate in-place incrementally and capture images
+        #    While rotating, keep EKF updated via get_pose_fn to track true pose/heading
         # ---------------------------------------------
         # Storage for captured images, poses and detections
         self.scan_images: List[Tuple[float, np.ndarray]] = []   # (angle_deg, image_rgb)
@@ -94,27 +96,42 @@ class PiBotActions:
         self.scan_positions_by_class: Dict[int, List[Tuple[float, float]]] = {}  # class_id -> [(x,y),...]
         cum_angle = 0.0
         for i in range(n_steps):
-            # Rotate on the spot by +step degrees
-            # Use forward=0, turning=+1. Duration computed from calibration
-            try:
-                self.ppi.set_velocity([0, 1], turning_tick=turning_tick, time=duration)
-            except Exception as e:
-                log.warning("scan: set_velocity failed at step %d/%d: %s", i+1, n_steps, e)
-                # attempt to continue
-            # Pause to allow sensors to settle/capture
+            # Rotate on the spot by +step degrees in small pulses and tick EKF between pulses
+            rotated_t = 0.0
+            pulse = max(0.05, min(0.2, duration / 5.0))  # 50–200 ms pulses
+            while rotated_t < duration:
+                t_chunk = min(pulse, duration - rotated_t)
+                try:
+                    # Command turn for a short chunk
+                    self.ppi.set_velocity([0, 1], turning_tick=turning_tick, time=t_chunk)
+                except Exception as e:
+                    log.warning("scan: set_velocity failed at step %d/%d: %s", i+1, n_steps, e)
+                # Give EKF a chance to update from sensors (if callback provided)
+                if callable(get_pose_fn):
+                    try:
+                        _ = get_pose_fn()
+                    except Exception:
+                        pass
+                # Small sleep to avoid tight loop (approximate the chunk time)
+                time.sleep(t_chunk)
+                rotated_t += t_chunk
+
+            # Short pause to settle, then capture EKF pose and image at this bearing
             time.sleep(max(0.0, float(pause_s)))
+            ang_now = cum_angle + step
+            # Capture pose first (closest to capture time)
+            pose_now = None
+            if callable(get_pose_fn):
+                try:
+                    pose_now = get_pose_fn()
+                except Exception as e:
+                    log.warning("scan: pose capture failed at step %d/%d: %s", i+1, n_steps, e)
+                    pose_now = [0.0, 0.0, 0.0]
             # Capture an image after turning and pausing
             try:
                 img_rgb = self.ppi.get_image()
-                ang_now = cum_angle + step
                 self.scan_images.append((ang_now, img_rgb))
-                # Capture pose if provided
-                if callable(get_pose_fn):
-                    try:
-                        pose_now = get_pose_fn()
-                    except Exception as e:
-                        log.warning("scan: pose capture failed at step %d/%d: %s", i+1, n_steps, e)
-                        pose_now = [0.0, 0.0, 0.0]
+                if pose_now is not None:
                     self.scan_poses.append((ang_now, pose_now))
             except Exception as e:
                 log.warning("scan: image capture failed at step %d/%d: %s", i+1, n_steps, e)
@@ -131,6 +148,7 @@ class PiBotActions:
         # -----------------------------------------------------------
         # 5) Batch detection over captured images (optional, preferred)
         # -----------------------------------------------------------
+        log.debug("scan: running detection on %d frames ...", len(self.scan_images))
         if detector is not None:
             try:
                 # Prepare BGR list in the same order as scan_images
@@ -183,6 +201,7 @@ class PiBotActions:
                                     if isinstance(dims, (list, tuple)) and len(dims) == 3:
                                         true_h = float(dims[2])
                                 if true_h is None:
+                                    log.warning("scan: missing true height for class '%s'. Using 0.08 m.", label)
                                     true_h = 0.08
                                 est = fruit_ranger.from_bbox_height([x, y, w, h], true_h)
                                 if est is None:
@@ -192,6 +211,7 @@ class PiBotActions:
                                     rx, ry, rth = float(pose_now[0]), float(pose_now[1]), float(pose_now[2])
                                     wx = rx + r * math.cos(rth + th)
                                     wy = ry + r * math.sin(rth + th)
+                                    log.debug("scan: class='%s' bbox=[%.1f,%.1f,%.1f,%.1f] => r=%.3f m, θ=%.3f rad => @ (%.3f, %.3f)", label, x, y, w, h, r, th, wx, wy)
                                     world_ok = True
                             except Exception as e:
                                 error_reason = f'world_compute_failed:{e}'
@@ -246,6 +266,7 @@ class PiBotActions:
                         })
                     except Exception:
                         continue
+            log.debug("scan: clustering %d detections (incl. priors) ...", len(dets_for_cluster))
             self.current_obj_positions = cluster_detections_dbscan(dets_for_cluster, eps_m=0.15, min_samples=1, arena_bound=None)
         except Exception as e:
             log.warning("scan: clustering failed: %s", e)
