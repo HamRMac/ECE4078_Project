@@ -2,6 +2,7 @@ import time
 import math
 import logging
 from typing import Optional, Callable, Dict, Any, List, Tuple
+from collections import deque
 
 import numpy as np
 
@@ -37,6 +38,14 @@ class PiBotActions:
             self.baseline = 0.08  # m
             log.warning("PiBotActions: calibration load failed (%s). Using defaults scale=%.6f baseline=%.4f",
                         e, self.scale, self.baseline)
+
+        # ---------- Added (non-breaking) ----------
+        self.get_pose_fn: Optional[Callable[[], List[float]]] = None
+        self.target_queue: deque = deque()          # queue of {"class","class_id","position":[x,y],"count"}
+        self.last_forward: float = 0.0              # last forward distance for return
+        self.dets_for_cluster: List[Dict[str, Any]] = []  # raw dets used for clustering
+        self.current_obj_positions: List[Dict[str, Any]] = []  # clustered objects
+        # -----------------------------------------
 
     def _turn_time_for_angle(self, angle_deg: float, turning_tick: int) -> float:
         """Compute time (s) to rotate in place by angle_deg at given turning_tick.
@@ -268,6 +277,11 @@ class PiBotActions:
                         continue
             log.debug("scan: clustering %d detections (incl. priors) ...", len(dets_for_cluster))
             self.current_obj_positions = cluster_detections_dbscan(dets_for_cluster, eps_m=0.15, min_samples=1, arena_bound=None)
+
+            # ---------- Added (persist + build queue) ----------
+            self.dets_for_cluster = dets_for_cluster
+            self._build_queue_from_current_objs(order="fifo", pose_fn=get_pose_fn)
+            # ---------------------------------------------------
         except Exception as e:
             log.warning("scan: clustering failed: %s", e)
             self.current_obj_positions = []
@@ -300,8 +314,6 @@ class PiBotActions:
         if angle != 0.0:
             log.info("approach_fruit: rotating to angle %.1f°", angle)
             self.ppi.set_velocity([0, 0], turning_tick=turning_tick)
-
-
 
         # rotate to face target direction first
         if angle != 0.0:
@@ -398,3 +410,120 @@ class PiBotActions:
             self.ppi.set_velocity([0, 0])
         except Exception:
             pass
+
+    # ======================================================================
+    #                Added: dets_for_cluster + queue conveniences
+    # ======================================================================
+
+    def _to_target_dict(self, item: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """
+        Normalise a detection/cluster item into:
+          {"class":str, "class_id":int, "position":[x,y], "count":int}
+        Accepts either {"position":[x,y],...} or {"world":{"x":...,"y":...},...}.
+        """
+        try:
+            cls = item.get("class") or item.get("label") or "fruit"
+            cid = int(item.get("class_id", -1)) if item.get("class_id") is not None else -1
+
+            if "position" in item and item["position"] is not None:
+                x, y = float(item["position"][0]), float(item["position"][1])
+            elif isinstance(item.get("world"), dict) and "x" in item["world"] and "y" in item["world"]:
+                x, y = float(item["world"]["x"]), float(item["world"]["y"])
+            else:
+                return None
+
+            cnt = int(item.get("count", 1))
+            return {"class": cls, "class_id": cid, "position": [x, y], "count": cnt}
+        except Exception:
+            return None
+
+    def _build_queue_from_current_objs(self, order: str = "fifo", pose_fn: Optional[Callable[[], List[float]]] = None) -> None:
+        """
+        Build/refresh self.target_queue from clustered objects if available,
+        else fall back to raw dets_for_cluster. Optionally sort by nearest.
+        """
+        self.target_queue.clear()
+        if pose_fn:
+            self.get_pose_fn = pose_fn
+
+        source = self.current_obj_positions if self.current_obj_positions else self.dets_for_cluster
+        canon: List[Dict[str, Any]] = []
+        for it in (source or []):
+            td = self._to_target_dict(it)
+            if td:
+                canon.append(td)
+
+        # Optional nearest-first ordering
+        if order == "nearest" and callable(self.get_pose_fn) and canon:
+            try:
+                rx, ry, *_ = self.get_pose_fn()
+                canon.sort(key=lambda t: (t["position"][0] - rx)**2 + (t["position"][1] - ry)**2)
+            except Exception:
+                pass
+
+        for t in canon:
+            self.target_queue.append(t)
+
+    def refresh_queue_from_scan(self, order: str = "fifo") -> None:
+        """Rebuild target queue using the last scan results (use after a re-scan)."""
+        self._build_queue_from_current_objs(order=order)
+
+    def has_targets(self) -> bool:
+        return len(self.target_queue) > 0
+
+    def peek_target(self) -> Optional[Dict[str, Any]]:
+        return self.target_queue[0] if self.target_queue else None
+
+    def pop_target(self) -> Optional[Dict[str, Any]]:
+        return self.target_queue.popleft() if self.target_queue else None
+
+    def _rel_angle_dist(self, target_xy: List[float], standoff_m: float = 0.10) -> Tuple[float, float]:
+        """
+        Convert world target XY to (relative angle [deg], forward distance [m]) from current pose.
+        Requires self.get_pose_fn to be set (passed into scan or set later).
+        """
+        if not callable(self.get_pose_fn):
+            raise RuntimeError("Pose function not set. Pass get_pose_fn to scan(...) or set self.get_pose_fn.")
+        rx, ry, rth = [float(v) for v in self.get_pose_fn()]
+        tx, ty = float(target_xy[0]), float(target_xy[1])
+        dx, dy = tx - rx, ty - ry
+        ang = math.degrees(math.atan2(dy, dx) - rth)
+        ang = (ang + 180.0) % 360.0 - 180.0  # wrap to [-180, 180]
+        dist = max(0.0, math.hypot(dx, dy) - float(standoff_m))
+        return ang, dist
+
+    def approach_current(self, turning_tick: int = 25, forward_tick: int = 50, standoff_m: float = 0.10) -> Optional[Dict[str, float]]:
+        """
+        Convenience: compute (angle, distance) to the first target in the queue and call approach_fruit(...).
+        Stores the forward distance so return_from_current() can back out the same amount.
+        """
+        tgt = self.peek_target()
+        if not tgt:
+            return None
+        angle_deg, distance_m = self._rel_angle_dist(tgt["position"], standoff_m=standoff_m)
+        self.last_forward = distance_m
+        self.approach_fruit(angle_deg=angle_deg, distance_m=distance_m,
+                            turning_tick=turning_tick, forward_tick=forward_tick)
+        return {"angle_deg": angle_deg, "distance_m": distance_m}
+
+    def collect_current(self, duration_s: float = 2.1) -> bool:
+        """
+        Convenience: call collect_fruit() using the current target's class, then pop it from the queue.
+        """
+        tgt = self.peek_target()
+        if not tgt:
+            return False
+        self.collect_fruit(collection_class=tgt.get("class", "default"), duration_s=duration_s)
+        self.pop_target()
+        return True
+
+    def return_from_current(self, forward_tick: int = 50) -> bool:
+        """
+        Convenience: back out by the same distance used in the last approach_fruit().
+        """
+        d = float(self.last_forward or 0.0)
+        if d <= 1e-6:
+            return False
+        self.return_to_scan_point(distance_m=d, forward_tick=forward_tick)
+        self.last_forward = 0.0
+        return True
