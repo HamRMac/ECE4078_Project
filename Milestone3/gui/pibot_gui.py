@@ -31,27 +31,34 @@ import pdb;
 from planning.grid_map import GridMap
 from planning.astar import AStarPlanner, PlanResult
 from navigation.controller import ControllerManager
+from state_machine.state_machine import PiBotFruitSearchSM
+from util.pibot import PenguinPi
+
 log = logging.getLogger(__name__)
 
 
-class OGViewer:
+class PiBotGUI:
     """PyGame-based interactive viewer for OG and planning."""
 
     def __init__(
         self,
+        # Import Instances of objects
         grid: GridMap,
-        planner: Optional[AStarPlanner] = None,
-        get_pose_fn=None,
-        window_scale: int = 4,
-        fps: int = 15,
-        controller_kind: str = "ttg",
-        dry_run: bool = False,
-        ARUCO_locations: np.ndarray = None,
-        ppi=None,
-        # Optional live detection integration
-        get_frame_fn=None,
+        ppi: PenguinPi,
+        planner: AStarPlanner,
+        state_machine: PiBotFruitSearchSM,
         detector=None,
         fruit_ranger=None,
+        # Controller type
+        controller_kind: str = "ttg",
+        # Import functions
+        get_pose_fn = None,
+        get_frame_fn = None,
+        # Gui Settings
+        window_scale: int = 4,
+        fps: int = 15,  
+        dry_run: bool = False,
+        ARUCO_locations: np.ndarray = None,
         target_dims: Optional[dict] = None,
     ) -> None:
         """
@@ -64,7 +71,8 @@ class OGViewer:
         - fps: frames per second for the main loop
         """
         self.grid = grid
-        self.planner = planner or AStarPlanner()
+        self.planner = planner
+        self.state_machine = state_machine
         self.get_pose_fn = get_pose_fn
         self.scale = int(max(1, window_scale))
         self.fps = int(max(1, fps))

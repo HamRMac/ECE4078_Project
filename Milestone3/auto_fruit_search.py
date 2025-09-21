@@ -28,11 +28,36 @@ import slam.aruco_detector as aruco
 # Import navigation components
 from navigation.controller import ControllerManager
 from planning.astar import AStarPlanner
-from gui.og_viewer import OGViewer
+from gui.pibot_gui import PiBotGUI
 from planning.grid_map import GridMap
+
+# Import state machine
+from state_machine.state_machine import PiBotFruitSearchSM
 
 # Module logger
 log = logging.getLogger(__name__)
+
+# --- Colored logging formatter (ANSI) ---
+class _ColoredFormatter(logging.Formatter):
+    RESET = "\033[0m"
+    COLORS = {
+        logging.DEBUG: "\033[32m",          # green
+        logging.INFO: "\033[0m",            # default
+        logging.WARNING: "\033[33m",        # yellow/amber
+        logging.ERROR: "\033[31m",          # red
+        logging.CRITICAL: "\033[1;31m",     # bold red
+    }
+
+    def __init__(self, fmt: str, use_color: bool = True):
+        super().__init__(fmt)
+        self.use_color = use_color
+
+    def format(self, record):
+        msg = super().format(record)
+        if self.use_color:
+            color = self.COLORS.get(record.levelno, self.RESET)
+            return f"{color}{msg}{self.RESET}"
+        return msg
 
 def read_true_map(fname):
     """Read the ground truth map and output the pose of the ArUco markers and 5 target fruits&vegs to search for
@@ -155,17 +180,17 @@ def drive_to_point(waypoint, robot_pose, controller_kind: str = "ttg"):
             break
 
         # Refresh pose from EKF
-        pose = get_robot_pose(ppi, aruco_det, ekf)
+        pose = get_robot_pose(penguinpiInstance, aruco_detector, ekfInstance)
         fwd_cmd, turn_cmd, fwd_tick, turn_tick, done = ctrl_mgr.compute(pose, waypoint)
         if done:
             arrived = True
             break
-        ppi.set_velocity([fwd_cmd, turn_cmd], tick=fwd_tick, turning_tick=turn_tick, time=0)
+        penguinpiInstance.set_velocity([fwd_cmd, turn_cmd], tick=fwd_tick, turning_tick=turn_tick, time=0)
 
         time.sleep(dt_loop)
 
     # Stop safely
-    ppi.set_velocity([0, 0])
+    penguinpiInstance.set_velocity([0, 0])
     if arrived:
         log.info("Arrived at waypoint (%.2f, %.2f)", waypoint[0], waypoint[1])
     else:
@@ -462,109 +487,192 @@ class LiveTargetEstimator(threading.Thread):
     def stop(self):
         self._stop_event.set()
 
-# main loop
-if __name__ == "__main__":
+# -------------------------------
+# Structured entrypoint helpers
+# -------------------------------
+
+def _parse_args():
     parser = argparse.ArgumentParser("Fruit searching")
     parser.add_argument("--map", type=str, default='M3_prac_map_min.txt', help='Path to true map file (full/part/min)')
     parser.add_argument("--shopping_list", type=str, default='M3_prac_shopping_list.txt', help='Path to shopping list file')
     parser.add_argument("--calib_dir", type=str, default='calibration/param/', help='Directory containing calibration files')
     parser.add_argument("--ip", metavar='', type=str, default='192.168.50.1')
     parser.add_argument("--port", metavar='', type=int, default=8080)
-    parser.add_argument("--controller", type=str, default='ttg', choices=['ttg','ppc','rhp'], help='Controller type: turn-then-go (ttg), pure pursuit (ppc), or receding horizon (rhp)')
-    parser.add_argument("--no_run", action='store_true', help='Only load map, world model, and occupancy grid; do not start autonomy')
+    parser.add_argument("--controller", type=str, default='ttg', choices=['ttg','ppc','rhp'], help='Controller type')
+    parser.add_argument("--no_run", action='store_true', help='Only load map and grid; do not start autonomy')
     parser.add_argument("--log", type=str, default='INFO', choices=['DEBUG','INFO','WARNING','ERROR','CRITICAL'], help='Logging level')
-    parser.add_argument("--model", type=str, default='', help='YOLO model path for fruit detection (optional)')
-    parser.add_argument("--use_fusion", action='store_true',
-                        help="Fuse bbox-height with bottom-pixel ground-ray for fruit range")
+    parser.add_argument("--model", type=str, default='', help='YOLO model path (optional)')
+    parser.add_argument("--use_fusion", action='store_true', help='Fuse bbox-height with bottom-pixel ground-ray for fruit range')
     parser.add_argument("--level", type=int, default=1)
-    args, _ = parser.parse_known_args()
+    return parser.parse_known_args()
 
-    # Configure root logging early
-    logging.basicConfig(level=getattr(logging, args.log.upper(), logging.INFO),
-                        format='[%(levelname)s] %(name)s: %(message)s')
-    log.info("auto_fruit_search starting (ip=%s, port=%s, controller=%s, no_run=%s)", args.ip, args.port, args.controller, args.no_run)
 
-    ppi = PenguinPi(args.ip,args.port)
+def _configure_logging(level: str):
+    # Decide whether to use colors (TTY and not disabled by NO_COLOR)
+    use_color = hasattr(sys.stderr, 'isatty') and sys.stderr.isatty() and (os.environ.get('NO_COLOR') is None)
 
-    # read in the true map
+    root = logging.getLogger()
+    # Clear existing handlers to avoid duplicate logs if reconfigured
+    if root.handlers:
+        for h in list(root.handlers):
+            root.removeHandler(h)
+
+    root.setLevel(getattr(logging, (level or 'INFO').upper(), logging.INFO))
+    fmt = '[%(levelname)s] %(name)s: %(message)s'
+    handler = logging.StreamHandler()
+    handler.setFormatter(_ColoredFormatter(fmt, use_color=use_color))
+    root.addHandler(handler)
+
+
+def _init_penguinpi(args):
+    log.info("Connecting to PenguinPi (ip=%s, port=%s)", args.ip, args.port)
+    return PenguinPi(args.ip, args.port)
+
+
+def _load_map_and_shopping(args):
     log.info("Loading map file: %s", args.map)
     fruits_list, fruits_true_pos, aruco_true_pos, aruco_true_pos_id = read_true_map(args.map)
-    # read shopping list
     search_list = read_search_list(args.shopping_list)
+    search_poses = []
     try:
         search_poses = print_target_fruits_pos(search_list, fruits_list, fruits_true_pos)
     except Exception:
         log.info("Loaded shopping list (positions not available in minimal map).")
+    return (fruits_list, fruits_true_pos, aruco_true_pos, aruco_true_pos_id, search_list, search_poses)
 
-    # Build world model and occupancy grid
-    try:
-        # Fixed arena 2.4 x 2.4 m centered at origin => [-1.4, -1.4] .. [1.4, 1.4]
-        grid = GridMap(res=0.02, margin=0.0, robot_radius=0.09,
-                       inflation_margin=0.05, boundary_margin=0.01,
-                       arena_bounds_wm=(-1.4, -1.4, 1.4, 1.4))
-        grid.build_from_aruco(aruco_true_pos)
-        log.info("[WM] Occupancy grid built: size=%s res=%.3f m", str(grid.size), grid.res)
-    except Exception as e:
-        log.exception("[WM] Building occupancy grid failed: %s", e)
 
-    # Initialise the EKF functions
+def _build_grid_from_aruco(aruco_true_pos: np.ndarray) -> GridMap:
+    grid = GridMap(res=0.02, margin=0.0, robot_radius=0.09,
+                   inflation_margin=0.05, boundary_margin=0.01,
+                   arena_bounds_wm=(-1.4, -1.4, 1.4, 1.4))
+    grid.build_from_aruco(aruco_true_pos)
+    log.info("[WM] Occupancy grid built: size=%s res=%.3f m", str(grid.size), grid.res)
+    return grid
+
+
+def _init_ekf_and_aruco(args):
     log.info("Initialising EKF using calibration dir: %s", args.calib_dir)
-    ekf = init_ekf(args.calib_dir, args.ip)
-    # Pre-seed EKF with known ArUco positions from the provided map (Level 4/minimal map)
+    ekfInstance = init_ekf(args.calib_dir, args.ip)
     try:
-        ekf.seed_from_map_file(args.map, initial_covariance=1e-10, only_aruco=True)
+        ekfInstance.seed_from_map_file(args.map, initial_covariance=1e-10, only_aruco=True)
         log.info("[EKF] Seeded ArUco landmarks from map: %s", args.map)
     except Exception as e:
         log.warning("[EKF] Seeding from map failed: %s", e)
-    # Create ArUco detector
-    aruco_det = aruco.aruco_detector(ekf.robot, marker_length=0.07)
+    aruco_det = aruco.aruco_detector(ekfInstance.robot, marker_length=0.07)
     log.info("ArUco detector initialised (marker_length=0.07)")
+    return ekfInstance, aruco_det
 
-    # Optional live detector and fruit ranger for GUI
-    yolo_detector = None
-    fruit_ranger = None
-    target_dims = None
+
+def _init_perception(args, ekfInstance):
+    yoloDetectorInstance = None
+    fruitRangerInstance = None
+    target_dims_Dict = None
     try:
-        # Camera intrinsics for FruitRanger
-        camK = ekf.robot.camera_matrix
+        camK = ekfInstance.robot.camera_matrix
         from perception.fruit_ranger import FruitRanger
         from TargetPoseEst import TARGET_DIMENSIONS_DICT as TARGET_DIMS
-        fruit_ranger = FruitRanger(camera_matrix=camK)
-        target_dims = TARGET_DIMS
-        # Model path: CLI --model overrides default
+        fruitRangerInstance = FruitRanger(camera_matrix=camK)
+        target_dims_Dict = TARGET_DIMS
         if args.model:
             from YOLO.detector import Detector
-            yolo_detector = Detector(args.model, 384)
+            yoloDetectorInstance = Detector(args.model, 384)
             log.info("YOLO model loaded: %s", args.model)
     except Exception as e:
         log.warning("Live detection initialisation issue: %s", e)
+    return yoloDetectorInstance, fruitRangerInstance, target_dims_Dict
 
-    # Interactive OG viewer (PyGame) always enabled. Closing window ends program.
+
+def _make_pose_fn(args, penguinpiInstance, aruco_detector, ekfInstance):
     def _get_pose():
-        # In dry-run mode (no_run or localhost), keep pose at origin; otherwise query EKF
         if args.no_run or args.ip == 'localhost':
             return [0.0, 0.0, 0.0]
-        return get_robot_pose(ppi, aruco_det, ekf)
-    
-    if args.level == 2 or args.level == 3:
-        next_waypoint = calc_waypoint(search_poses[0], _get_pose(), 0.1)
-        print(next_waypoint)
+        return get_robot_pose(penguinpiInstance, aruco_detector, ekfInstance)
+    return _get_pose
 
-    viewer = OGViewer(grid=grid,
-                      planner=AStarPlanner(),
-                      get_pose_fn=_get_pose,
-                      window_scale=4,
-                      fps=15,
-                      controller_kind=args.controller,
-                      dry_run=(args.no_run or args.ip == 'localhost'),
-                      ARUCO_locations=aruco_true_pos_id,
-                      ppi=ppi,
-                      get_frame_fn=ppi.get_image,
-                      detector=yolo_detector,
-                      fruit_ranger=fruit_ranger,
-                      target_dims=target_dims)
-    # Start the viewer and run until closed
-    log.info("Launching OGViewer GUI")
-    viewer.run()
-    log.info("OGViewer closed; exiting program")
-    sys.exit(0)
+
+def _init_state_machine():
+    try:
+        sm = PiBotFruitSearchSM()
+        return sm
+    except Exception:
+        return None
+
+
+def _load_target_fruits_dict(list_path: str):
+    targets = {}
+    try:
+        with open(list_path, "r") as f:
+            for idx, line in enumerate(f):
+                targets[idx] = {"collected": False, "fruit": line.strip()}
+    except Exception:
+        pass
+    return targets
+
+
+def _create_gui(args, gridMapInstance, yoloDetectorInstance, fruitRangerInstance, penguinpiInstance,
+                stateMachineInstance, _get_pose, aruco_true_pos_id, target_dims_Dict):
+    # Note: state_machine is passed through to GUI here to preserve current behaviour,
+    # even though the GUI may not consume it.
+    return PiBotGUI(
+        grid=gridMapInstance,
+        planner=AStarPlanner(),
+        detector=yoloDetectorInstance,
+        fruit_ranger=fruitRangerInstance,
+        ppi=penguinpiInstance,
+        state_machine=stateMachineInstance,  # kept for compatibility with current call site
+        get_pose_fn=_get_pose,
+        get_frame_fn=penguinpiInstance.get_image,
+        window_scale=4,
+        fps=15,
+        controller_kind=args.controller,
+        dry_run=(args.no_run or args.ip == 'localhost'),
+        ARUCO_locations=aruco_true_pos_id,
+        target_dims=target_dims_Dict,
+    )
+
+
+def main():
+    args, _ = _parse_args()
+    _configure_logging(args.log)
+    log.info("auto_fruit_search starting (ip=%s, port=%s, controller=%s, no_run=%s)", args.ip, args.port, args.controller, args.no_run)
+    if args.no_run or args.ip == 'localhost':
+        log.warning("Running in no_run / localhost mode! No robot will be controlled!")
+
+    # 1) Robot I/O
+    penguinpiInstance = _init_penguinpi(args)
+
+    # 2) Map + shopping list
+    fruits_list, fruits_true_pos, aruco_true_pos, aruco_true_pos_id, search_list, search_poses = _load_map_and_shopping(args)
+
+    # 3) Occupancy grid
+    gridMapInstance = _build_grid_from_aruco(aruco_true_pos)
+
+    # 4) EKF + ArUco
+    ekfInstance, aruco_det = _init_ekf_and_aruco(args)
+
+    # 5) Perception
+    yoloDetectorInstance, fruitRangerInstance, target_dims_Dict = _init_perception(args, ekfInstance)
+
+    # 6) Pose callback
+    _get_pose = _make_pose_fn(args, penguinpiInstance, aruco_det, ekfInstance)
+
+    # 7) (Optional) Waypoint demo (kept disabled as before)
+    # if (args.level == 2 or args.level == 3) and search_poses:
+    #     next_waypoint = calc_waypoint(search_poses[0], _get_pose(), 0.1)
+    #     print(next_waypoint)
+
+    # 8) State machine + targets (if used by GUI)
+    stateMachineInstance = _init_state_machine()
+    _ = _load_target_fruits_dict("ECE4078_Project/Milestone3/M3_prac_shopping_list.txt")
+
+    # 9) GUI
+    guiInstance = _create_gui(args, gridMapInstance, yoloDetectorInstance, fruitRangerInstance,
+                              penguinpiInstance, stateMachineInstance, _get_pose,
+                              aruco_true_pos_id, target_dims_Dict)
+    log.info("Launching PiBotGUI")
+    guiInstance.run()
+    log.info("PiBotGUI closed; exiting program")
+
+
+if __name__ == "__main__":
+    sys.exit(main() or 0)
