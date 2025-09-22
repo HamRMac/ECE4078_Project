@@ -325,29 +325,34 @@ class PiBotActions:
 
         # -----------------------------------------------------------
         # 6) Cluster detections into object hypotheses (store for next stage)
-        #    Include prior object hypotheses (if any) as weighted detections
+        #    Maintain a persistent, ever-growing list of raw world detections
+        #    across scans; cluster over the full list each time.
         # -----------------------------------------------------------
         try:
-            # Merge prior object positions as detections with weight=count
-            dets_for_cluster = list(self.scan_detections)
-            if hasattr(self, 'current_obj_positions') and isinstance(self.current_obj_positions, list):
-                for cl in self.current_obj_positions:
-                    try:
-                        dets_for_cluster.append({
-                            'label': cl.get('class', ''),
-                            'class_id': cl.get('class_id', -1),
-                            'world': {'x': float(cl['position'][0]), 'y': float(cl['position'][1])},
-                            'count': int(cl.get('count', 1))
-                        })
-                    except Exception:
+            # Ensure persistent list exists
+            if not hasattr(self, 'dets_for_cluster') or not isinstance(self.dets_for_cluster, list):
+                self.dets_for_cluster = []
+            # Append new world detections from this scan
+            new_cnt = 0
+            for det in (self.scan_detections or []):
+                try:
+                    w = det.get('world')
+                    if w is None:
                         continue
-            log.debug("scan: clustering %d detections (incl. priors) ...", len(dets_for_cluster))
-            self.current_obj_positions = cluster_detections_dbscan(dets_for_cluster, eps_m=0.15, min_samples=1, arena_bound=None)
+                    x = float(w['x']); y = float(w['y'])
+                    label = det.get('label', '')
+                    cid = det.get('class_id', -1)
+                    # store with unit weight; the growth in list size represents observation count
+                    self.dets_for_cluster.append({'label': label, 'class_id': cid, 'world': {'x': x, 'y': y}, 'count': 1})
+                    new_cnt += 1
+                except Exception:
+                    continue
+            log.debug("scan: clustering over %d persisted detections (+%d this scan)", len(self.dets_for_cluster), new_cnt)
+            # Cluster over the full persistent list
+            self.current_obj_positions = cluster_detections_dbscan(self.dets_for_cluster, eps_m=0.15, min_samples=1, arena_bound=None)
 
-            # ---------- Added (persist + build queue) ----------
-            self.dets_for_cluster = dets_for_cluster
+            # Rebuild target queue from clustered objects
             self._build_queue_from_current_objs(order="fifo", pose_fn=get_pose_fn)
-            # ---------------------------------------------------
         except Exception as e:
             log.warning("scan: clustering failed: %s", e)
             self.current_obj_positions = []
@@ -479,6 +484,47 @@ class PiBotActions:
             log.warning("return_to_scan_point: set_velocity failed: %s", e)
 
         # Ensure motors are stopped
+        try:
+            self.ppi.set_velocity([0, 0])
+        except Exception:
+            pass
+
+    def localise_scan(self,
+                      step_angle_deg: float = 45.0,
+                      get_pose_fn: Optional[Callable[[], List[float]]] = None,
+                      turning_tick: int = 35,
+                      pause_s: float = 0.3) -> None:
+        try:
+            step = abs(float(step_angle_deg))
+        except Exception:
+            step = 45.0
+        if step < 10.0:
+            step = 10.0
+        n_steps = max(1, int(math.ceil(360.0 / step)))
+        step = 360.0 / n_steps
+
+        def wrap_pi(a: float) -> float:
+            return (a + math.pi) % (2.0 * math.pi) - math.pi
+
+        for _ in range(n_steps):
+            try:
+                pose_now = get_pose_fn() if callable(get_pose_fn) else [0.0, 0.0, 0.0]
+            except Exception:
+                pose_now = [0.0, 0.0, 0.0]
+            curr_th = float(pose_now[2] if pose_now is not None else 0.0)
+            goal_th = wrap_pi(curr_th + math.radians(step))
+            try:
+                last_tick = self.turn_to_heading(goal_th, get_pose_fn if callable(get_pose_fn) else (lambda: [0.0, 0.0, 0.0]), int(turning_tick))
+                try:
+                    self.ppi.set_velocity([0, 0], turning_tick=last_tick, time=0)
+                except Exception:
+                    pass
+            except Exception:
+                break
+            try:
+                time.sleep(max(0.0, float(pause_s)))
+            except Exception:
+                pass
         try:
             self.ppi.set_velocity([0, 0])
         except Exception:

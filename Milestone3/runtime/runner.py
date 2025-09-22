@@ -69,6 +69,8 @@ class Runner(threading.Thread):
         self._searched_sectors: set[tuple[int, int]] = set()
         self._next_sector_idx: Optional[Tuple[int, int]] = None
         self._next_scan_point: Optional[Tuple[float, float]] = None
+        # Track if a plan was just (re)generated to avoid spinning at the very first waypoint
+        self._just_replanned: bool = False
 
         # modes: 'IDLE' | 'MANUAL_WAYPOINTS' | 'AUTO'
         # Start in IDLE; GUI can send SwitchMode('AUTO') (e.g., press 'S') to begin SM control
@@ -128,6 +130,8 @@ class Runner(threading.Thread):
             self._last_plan_by_goal[key] = list(self._plan_waypoints)
         except Exception:
             pass
+        # Mark as just replanned so we can skip initial spin
+        self._just_replanned = True
         return True
 
     def _maybe_replan(self, pose):
@@ -185,11 +189,42 @@ class Runner(threading.Thread):
         log.debug("drive_step: wp_idx=%d/%d cmd=(%d,%d) ticks=(%d,%d)", self._wp_idx, max(0, len(self._plan_waypoints)-1), fwd_cmd, turn_cmd, fwd_tick, turn_tick)
         if done:
             if self._wp_idx < len(self._plan_waypoints) - 1:
+                # Perform a quick 360° spin at each waypoint, except immediately after a replan at the first wp
+                do_spin = not (self._wp_idx == 0 and self._just_replanned)
+                '''
+                try:
+                    if do_spin and self.actions is not None and self._drive_enabled:
+                        self.world.set_status(action='spin', progress=f"wp{self._wp_idx}")
+                        
+                        self.actions.localise_scan(step_angle_deg=45.0,
+                                                   get_pose_fn=self.get_pose_fn,
+                                                   turning_tick=50,
+                                                   pause_s=0.2)
+                        
+                except Exception:
+                    pass
+                '''
+                # Clear the just-replanned guard after first advancement opportunity
+                if self._just_replanned:
+                    self._just_replanned = False
+
                 self._wp_idx += 1
                 self.world.set_plan(self._plan_waypoints, active_idx=self._wp_idx)
                 self.world.set_status(progress=f"{self._wp_idx}/{len(self._plan_waypoints)-1}")
                 log.debug("Reached waypoint; advancing to %d", self._wp_idx)
             else:
+                # Final waypoint reached: optional final spin as well
+                '''
+                try:
+                    if self.actions is not None and self._drive_enabled:
+                        self.world.set_status(action='spin_final')
+                        self.actions.localise_scan(step_angle_deg=45.0,
+                                                   get_pose_fn=self.get_pose_fn,
+                                                   turning_tick=50,
+                                                   pause_s=0.2)
+                except Exception:
+                    pass
+                '''
                 self.cmd.stop()
                 self.world.set_status(action='arrived')
                 self._plan_waypoints = []
@@ -245,7 +280,7 @@ class Runner(threading.Thread):
                                                        marker_length=0.07,
                                                        fruit_radius=0.05,
                                                        fov_deg=360.0,
-                                                       max_distance=1.2,
+                                                       max_distance=0.8,
                                                        step_cells=2)
                             self.grid.apply_safety_mask(safe)
                             # Update dynamic obstacles from current fruit positions with buffered radius
@@ -397,6 +432,8 @@ class Runner(threading.Thread):
                     self._last_plan_by_goal[key] = list(self._plan_waypoints)
                 except Exception:
                     pass
+                # New plan installed; skip spin at first waypoint
+                self._just_replanned = True
                 break
 
             if chosen_goal is None:
