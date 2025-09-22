@@ -499,7 +499,8 @@ class LiveTargetEstimator(threading.Thread):
 
 def _parse_args():
     parser = argparse.ArgumentParser("Fruit searching")
-    parser.add_argument("--map", type=str, default='M3_prac_map_min.txt', help='Path to true map file (full/part/min)')
+    # For Level 3, default to the L3 map; only accept levels 3 or 4
+    parser.add_argument("--map", type=str, default='james_house_l3_map.txt', help='Path to map file (L3 default: james_house_l3_map.txt)')
     parser.add_argument("--shopping_list", type=str, default='M3_prac_shopping_list.txt', help='Path to shopping list file')
     parser.add_argument("--calib_dir", type=str, default='calibration/param/', help='Directory containing calibration files')
     parser.add_argument("--ip", metavar='', type=str, default='192.168.50.1')
@@ -509,7 +510,7 @@ def _parse_args():
     parser.add_argument("--log", type=str, default='INFO', choices=['DEBUG','INFO','WARNING','ERROR','CRITICAL'], help='Logging level')
     parser.add_argument("--model", type=str, default='', help='YOLO model path (optional)')
     parser.add_argument("--use_fusion", action='store_true', help='Fuse bbox-height with bottom-pixel ground-ray for fruit range')
-    parser.add_argument("--level", type=int, default=1)
+    parser.add_argument("--level", type=int, default=3, choices=[3,4], help='Logic level: 3 or 4 (default 3)')
     parser.add_argument("--interactive_gui", action='store_true', help='Allow GUI clicks to set manual goals (Runner executes)')
     return parser.parse_known_args()
 
@@ -537,15 +538,31 @@ def _init_penguinpi(args):
 
 
 def _load_map_and_shopping(args):
+    """Load map and shopping list.
+
+    For Level 3: expects keys like 'lemon_0' and 'aruco1_0'. Fruit keys are normalised by stripping the trailing
+    '_0' to match shopping list entries. Returns also a dict mapping fruit -> (x,y) for quick lookup.
+    """
     log.info("Loading map file: %s", args.map)
     fruits_list, fruits_true_pos, aruco_true_pos, aruco_true_pos_id = read_true_map(args.map)
     search_list = read_search_list(args.shopping_list)
+
+    # Build fruit -> (x, y) dict (names already stripped by read_true_map)
+    known_targets = {}
+    try:
+        for i, name in enumerate(fruits_list):
+            if i < len(fruits_true_pos):
+                known_targets[str(name)] = (float(fruits_true_pos[i][0]), float(fruits_true_pos[i][1]))
+    except Exception:
+        pass
+
     search_poses = []
     try:
         search_poses = print_target_fruits_pos(search_list, fruits_list, fruits_true_pos)
     except Exception:
         log.info("Loaded shopping list (positions not available in minimal map).")
-    return (fruits_list, fruits_true_pos, aruco_true_pos, aruco_true_pos_id, search_list, search_poses)
+
+    return (fruits_list, fruits_true_pos, aruco_true_pos, aruco_true_pos_id, search_list, search_poses, known_targets)
 
 
 def _build_grid_from_aruco(aruco_true_pos: np.ndarray) -> GridMap:
@@ -631,8 +648,8 @@ def main():
     # 1) Robot I/O
     penguinpiInstance = _init_penguinpi(args)
 
-    # 2) Map + shopping list
-    fruits_list, fruits_true_pos, aruco_true_pos, aruco_true_pos_id, search_list, search_poses = _load_map_and_shopping(args)
+    # 2) Map + shopping list (+ known targets for L3)
+    fruits_list, fruits_true_pos, aruco_true_pos, aruco_true_pos_id, search_list, search_poses, known_targets = _load_map_and_shopping(args)
 
     # 3) Occupancy grid
     gridMapInstance = _build_grid_from_aruco(aruco_true_pos)
@@ -655,7 +672,7 @@ def main():
     stateMachineInstance = _init_state_machine()
     _ = _load_target_fruits_dict("ECE4078_Project/Milestone3/M3_prac_shopping_list.txt")
 
-    # 9) Runtime wiring: WorldModel, Runner, (optional) SMRunner, GUI
+    # 9) Runtime wiring: WorldModel, Runner (L3/L4), GUI
     from queue import Queue
     world = WorldModel()
     intents_q: Queue = Queue()
@@ -664,24 +681,48 @@ def main():
     # Runner pose function is same EKF-based callback
     from pibot_actions import PiBotActions
     actions = PiBotActions(penguinpiInstance, calib_dir=args.calib_dir)
-    runner = Runner(commander=commander,
-                    ekf=ekfInstance,
-                    aruco_det=aruco_det,
-                    grid=gridMapInstance,
-                    planner=AStarPlanner(clearance_weight=0.6, clearance_power=2.0, clearance_epsilon=0.02*0.5, min_prune_clearance=0.10),
-                    world=world,
-                    get_pose_fn=_get_pose,
-                    intents_q=intents_q,
-                    controller_kind=args.controller,
-                    hz=10.0,
-                    drive_enabled=not (args.no_run or args.ip == 'localhost'),
-                    state_machine=stateMachineInstance,
-                    actions=actions,
-                    detector=yoloDetectorInstance,
-                    fruit_ranger=fruitRangerInstance,
-                    target_dims=target_dims_Dict,
-                    aruco_positions=aruco_true_pos,
-                    shopping_list=search_list)
+    # Choose runner based on level
+    if int(args.level) == 3:
+        from runtime.runnerl3 import RunnerL3
+        runner = RunnerL3(commander=commander,
+                          ekf=ekfInstance,
+                          aruco_det=aruco_det,
+                          grid=gridMapInstance,
+                          planner=AStarPlanner(clearance_weight=0.6, clearance_power=2.0, clearance_epsilon=0.02*0.5, min_prune_clearance=0.10),
+                          world=world,
+                          get_pose_fn=_get_pose,
+                          intents_q=intents_q,
+                          controller_kind=args.controller,
+                          hz=10.0,
+                          drive_enabled=not (args.no_run or args.ip == 'localhost'),
+                          # Level 3 SM is optional; RunnerL3 manages a simple flow
+                          state_machine=None,
+                          actions=actions,
+                          detector=yoloDetectorInstance,
+                          fruit_ranger=fruitRangerInstance,
+                          target_dims=target_dims_Dict,
+                          aruco_positions=aruco_true_pos,
+                          shopping_list=search_list,
+                          known_targets=known_targets)
+    else:
+        runner = Runner(commander=commander,
+                        ekf=ekfInstance,
+                        aruco_det=aruco_det,
+                        grid=gridMapInstance,
+                        planner=AStarPlanner(clearance_weight=0.6, clearance_power=2.0, clearance_epsilon=0.02*0.5, min_prune_clearance=0.10),
+                        world=world,
+                        get_pose_fn=_get_pose,
+                        intents_q=intents_q,
+                        controller_kind=args.controller,
+                        hz=10.0,
+                        drive_enabled=not (args.no_run or args.ip == 'localhost'),
+                        state_machine=stateMachineInstance,
+                        actions=actions,
+                        detector=yoloDetectorInstance,
+                        fruit_ranger=fruitRangerInstance,
+                        target_dims=target_dims_Dict,
+                        aruco_positions=aruco_true_pos,
+                        shopping_list=search_list)
     runner.start()
 
     # Providers for GUI (display-only)
