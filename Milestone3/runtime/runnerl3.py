@@ -358,15 +358,15 @@ class RunnerL3(threading.Thread):
                 if not isinstance(pos, (list, tuple)) or len(pos) < 2:
                     continue
                 wx, wy = float(pos[0]), float(pos[1])
-                # Keep-clear set
-                keepclear_positions.append((wx, wy))
-                # Label check for GUI filtering
+                # Label check for filtering
                 lab = d.get('class') if ('class' in d) else d.get('label')
                 lab = str(lab) if lab is not None else ''
                 if lab in shopping:
                     continue
                 if any(self._dist((wx, wy), txy) <= 0.15 for txy in self.known_targets.values()):
                     continue
+                # Keep-clear set
+                keepclear_positions.append((wx, wy))
                 gui_dets.append(d)
             except Exception:
                 continue
@@ -513,6 +513,7 @@ class RunnerL3(threading.Thread):
                     attempt += 1
                     continue
                 # 4) Drive this plan
+                done_this_target = False
                 while not self._stop.is_set() and self._plan_waypoints:
                     t0 = time.time()
                     pose = self.get_pose_fn()
@@ -531,11 +532,37 @@ class RunnerL3(threading.Thread):
                         time.sleep(2.0)
                         self._plan_waypoints = []
                         self.cmd.stop()
+                        # mirror collection update here to avoid re-scanning and double-reporting
+                        try:
+                            info = self.world.get_targets_info()
+                            remaining = dict(info.get('remaining', {}))
+                            if name in remaining:
+                                del remaining[name]
+                            collected = list(info.get('collected', []))
+                            if name not in collected:
+                                collected.append(name)
+                            order = list(info.get('order', []))
+                            seen = [n for n in remaining.keys()]
+                            unseen = [n for n in order if (n not in remaining) and (n not in collected)]
+                            self.world.set_targets_info(order=order,
+                                                        remaining=remaining,
+                                                        collected=collected,
+                                                        seen_not_collected=seen,
+                                                        unseen=unseen,
+                                                        active=None,
+                                                        positions=info.get('positions', {}))
+                            self.world.set_status(mode='AUTO', sm_state='L3', action='reached', target=name,
+                                                   progress=f"{idx+1}/{len(self._route)}")
+                        except Exception:
+                            pass
+                        done_this_target = True
                         break
                     dt = time.time() - t0
                     if dt < self._period:
                         time.sleep(self._period - dt)
                 # Loop back to scan again if not within threshold
+                if done_this_target:
+                    break
 
         self.world.set_status(mode='AUTO', sm_state='L3', action='done')
         print("Reached all targets")
