@@ -1,6 +1,8 @@
 import math
 from typing import List, Tuple, Optional
 
+from .grid_map import GridMap
+
 import numpy as np
 
 
@@ -43,7 +45,7 @@ def _line_intersects_square(p0, p1, center, half) -> bool:
     return any(_segments_intersect(p0, p1, e0, e1) for e0, e1 in edges)
 
 
-def compute_safety_mask(grid,
+def compute_safety_mask(grid: GridMap,
                         robot_pose: List[float],
                         aruco_positions: np.ndarray,
                         fruit_positions: List[Tuple[float, float]],
@@ -51,7 +53,7 @@ def compute_safety_mask(grid,
                         fruit_radius: float = 0.05,
                         fov_deg: float = 360.0,
                         max_distance: float = 1.2,
-                        step_cells: int = 2) -> np.ndarray:
+                        step_cells: int = 1) -> np.ndarray:
     """Compute a grid-aligned safety mask (True = observed free) near the robot.
 
     - Considers LOS from robot to grid cell centers within range/FOV
@@ -65,8 +67,9 @@ def compute_safety_mask(grid,
     safe = np.zeros((H, W), dtype=bool)
 
     # Evaluate subset of cells for performance
-    rows = range(0, H, max(1, int(step_cells)))
-    cols = range(0, W, max(1, int(step_cells)))
+    step = max(1, int(step_cells))
+    rows = range(0, H, step)
+    cols = range(0, W, step)
 
     for r in rows:
         for c in cols:
@@ -96,8 +99,14 @@ def compute_safety_mask(grid,
                     visible = False
                     break
             if visible:
-                safe[r, c] = True
+                # Mark sampled cell safe
+                if step == 1:
+                    safe[r, c] = True
+                else:
+                    # Block-fill the step x step neighborhood starting at (r,c)
+                    r1 = min(H, r + step)
+                    c1 = min(W, c + step)
+                    safe[r:r1, c:c1] = True
 
     # Simple erosion near boundaries could be added, but keep minimal now.
     return safe
-
