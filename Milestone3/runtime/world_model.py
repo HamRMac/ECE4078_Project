@@ -9,6 +9,14 @@ class WorldModel:
         self._plan: Optional[Dict[str, Any]] = None  # {'waypoints':[(x,y),...], 'active_idx':int}
         self._detections: List[Dict[str, Any]] = []
         self._status: Dict[str, Any] = {"mode": "IDLE", "sm_state": "Init", "action": "", "progress": ""}
+        # Sector overlay info for GUI
+        self._sectors: Dict[str, Any] = {
+            "rows": 3,
+            "cols": 3,
+            "searched": [],            # list of (ix, iy)
+            "next_idx": None,          # (ix, iy) or None
+            "next_point": None,        # (x, y) or None
+        }
 
     # Pose
     def set_pose(self, pose_xyz: List[float]) -> None:
@@ -50,3 +58,23 @@ class WorldModel:
         with self._lock:
             return dict(self._status)
 
+    # Sectors overlay
+    def set_sectors(self, rows: int, cols: int,
+                    searched: List[Tuple[int, int]],
+                    next_idx: Optional[Tuple[int, int]],
+                    next_point: Optional[Tuple[float, float]]) -> None:
+        with self._lock:
+            self._sectors = {
+                "rows": int(rows),
+                "cols": int(cols),
+                "searched": [ (int(ix), int(iy)) for (ix, iy) in (searched or []) ],
+                "next_idx": None if next_idx is None else (int(next_idx[0]), int(next_idx[1])),
+                "next_point": None if next_point is None else (float(next_point[0]), float(next_point[1])),
+            }
+
+    def get_sectors(self) -> Dict[str, Any]:
+        with self._lock:
+            # Return a shallow copy
+            s = dict(self._sectors)
+            s["searched"] = list(self._sectors.get("searched", []))
+            return s

@@ -67,6 +67,8 @@ class Runner(threading.Thread):
         # Sector exploration state
         self._sector_explorer = SectorExplorer(rows=3, cols=3, min_clearance_m=0.10)
         self._searched_sectors: set[tuple[int, int]] = set()
+        self._next_sector_idx: Optional[Tuple[int, int]] = None
+        self._next_scan_point: Optional[Tuple[float, float]] = None
 
         # modes: 'IDLE' | 'MANUAL_WAYPOINTS' | 'AUTO'
         # Start in IDLE; GUI can send SwitchMode('AUTO') (e.g., press 'S') to begin SM control
@@ -252,6 +254,20 @@ class Runner(threading.Thread):
                             log.info("Applied safety mask (observed safe cells: %d) and dynamic fruit obstacles (%d)", int(np.count_nonzero(safe)), len(fruit_positions))
                     except Exception as e:
                         log.warning("Visibility update failed: %s", e)
+                    # Mark current sector as searched AFTER completing the scan
+                    try:
+                        pose_now = self.get_pose_fn()
+                        ix, iy = self._sector_explorer.xy_to_sector_idx(self.grid, float(pose_now[0]), float(pose_now[1]))
+                        self._searched_sectors.add((ix, iy))
+                        # Publish overlay info to world model
+                        self.world.set_sectors(rows=self._sector_explorer.rows,
+                                               cols=self._sector_explorer.cols,
+                                               searched=list(self._searched_sectors),
+                                               next_idx=self._next_sector_idx,
+                                               next_point=self._next_scan_point)
+                        log.info("Marked sector (%d,%d) as searched", ix, iy)
+                    except Exception as e:
+                        log.warning("Failed to mark searched sector: %s", e)
                 except Exception:
                     pass
             else:
@@ -345,11 +361,15 @@ class Runner(threading.Thread):
                 pick = self._sector_explorer.pick_next_target(self.grid, excluded=self._searched_sectors)
                 if pick is not None:
                     goal, sector_idx, info = pick
-                    # Record sector as searched/excluded for future picks
-                    try:
-                        self._searched_sectors.add(tuple(sector_idx))
-                    except Exception:
-                        pass
+                    # Defer exclusion until scan completes at that location
+                    self._next_sector_idx = tuple(sector_idx)
+                    self._next_scan_point = (float(goal[0]), float(goal[1]))
+                    # Publish overlay info to world model
+                    self.world.set_sectors(rows=self._sector_explorer.rows,
+                                           cols=self._sector_explorer.cols,
+                                           searched=list(self._searched_sectors),
+                                           next_idx=self._next_sector_idx,
+                                           next_point=self._next_scan_point)
                     log.info("Selected sector %s (dark=%.2f free=%d/%d) → goal @ (%.2f, %.2f)",
                              str(sector_idx), float(info.dark_fraction), int(info.free_cells), int(info.total_cells), goal[0], goal[1])
                 else:
@@ -383,8 +403,7 @@ class Runner(threading.Thread):
                 # arrived or cannot plan; go back to spin
                 log.info("SM: NavigateToSafePoint → Scan")
                 try:
-                    self.mode = 'IDLE'
-                    #self.sm.T_navigate_to_safe_point_to_scan()
+                    self.sm.T_navigate_to_safe_point_to_scan()
                 except Exception:
                     pass
         else:

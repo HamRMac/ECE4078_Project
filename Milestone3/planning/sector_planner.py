@@ -37,6 +37,16 @@ class SectorExplorer:
         ys = np.linspace(by0, by1, self.rows + 1)
         return xs, ys
 
+    def xy_to_sector_idx(self, grid: GridMap, x: float, y: float) -> Tuple[int, int]:
+        """Map a world (x,y) to sector index (ix, iy), clamped to valid range."""
+        xs, ys = self._sector_edges(grid)
+        # ix: last edge <= x
+        ix = int(np.searchsorted(xs, float(x), side='right') - 1)
+        iy = int(np.searchsorted(ys, float(y), side='right') - 1)
+        ix = max(0, min(self.cols - 1, ix))
+        iy = max(0, min(self.rows - 1, iy))
+        return ix, iy
+
     @staticmethod
     def _xy_to_rc_bounds(grid: GridMap, x0: float, x1: float, y0: float, y1: float) -> Tuple[int, int, int, int]:
         assert grid.bounds_wm is not None and grid.size is not None
@@ -129,14 +139,13 @@ class SectorExplorer:
     ) -> Optional[Tuple[Tuple[float, float], Tuple[int, int], SectorInfo]]:
         excluded = excluded or set()
         stats = self.compute_sector_stats(grid)
-        # Prefer highest darkness among remaining sectors that have at least some free cells
+        # Prefer lowest darkness (safest) among remaining sectors that have at least some free cells
         stats = [s for s in stats if s.idx not in excluded and s.total_cells > 0 and s.free_cells > 0]
         if not stats:
             return None
-        stats.sort(key=lambda s: s.dark_fraction, reverse=True)
+        stats.sort(key=lambda s: s.dark_fraction)  # ascending = safest first
         for s in stats:
             pt = self._find_safe_point_in_sector(grid, s.bounds_xy, s.center_xy)
             if pt is not None:
                 return pt, s.idx, s
         return None
-

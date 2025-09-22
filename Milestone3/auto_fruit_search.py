@@ -691,6 +691,13 @@ def main():
     def _status_provider():
         return world.get_status()
 
+    # Sector overlay provider for GUI (via WorldModel)
+    def _sector_provider():
+        try:
+            return world.get_sectors()
+        except Exception:
+            return None
+
     # Intent sink from GUI clicks (wrap to SetGoal)
     def _intent_sink(gx: float, gy: float):
         intents_q.put(SetGoal(gx, gy))
@@ -718,6 +725,7 @@ def main():
         plan_provider=_plan_provider,
         status_provider=_status_provider,
         detections_provider=_detections_provider,
+        sector_provider=_sector_provider,
         mode_sink=_mode_sink,
     )
 

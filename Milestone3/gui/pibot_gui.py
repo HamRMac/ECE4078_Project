@@ -68,6 +68,8 @@ class PiBotGUI:
         status_provider=None,
         # Intent helpers for runtime control
         mode_sink=None,
+        # Sector overlay provider
+        sector_provider=None,
     ) -> None:
         """
         Parameters
@@ -101,6 +103,7 @@ class PiBotGUI:
         self.detections_provider = detections_provider
         self.status_provider = status_provider
         self.mode_sink = mode_sink
+        self.sector_provider = sector_provider
 
         # Interactive state
         self.goal_xy: Optional[Tuple[float, float]] = None
@@ -130,6 +133,70 @@ class PiBotGUI:
         """Draw start (green), current (blue), goal (red), path (blue), and robot sprite."""
         # Convert numpy OG image to PyGame surface each frame (copy for overlay)
         vis_bgr = self.grid.render(scale=self.scale)
+
+        # Draw sector overlays if provided
+        if callable(getattr(self, 'sector_provider', None)):
+            try:
+                info = self.sector_provider()
+            except Exception:
+                info = None
+            if isinstance(info, dict) and self.grid.bounds_wm is not None and self.grid.size is not None:
+                rows = int(info.get('rows', 3) or 3)
+                cols = int(info.get('cols', 3) or 3)
+                searched = set(tuple(t) for t in (info.get('searched') or []))
+                next_idx = tuple(info.get('next_idx')) if info.get('next_idx') is not None else None
+                next_point = tuple(info.get('next_point')) if info.get('next_point') is not None else None
+
+                bx0, by0, bx1, by1 = self.grid.bounds_wm
+                xs = np.linspace(bx0, bx1, cols + 1)
+                ys = np.linspace(by0, by1, rows + 1)
+                H, W = self.grid.size
+                # Create an overlay image for alpha blending
+                overlay = vis_bgr.copy()
+
+                def wc_to_px(wx: float, wy: float) -> Tuple[int, int]:
+                    # Convert world to grid then to pixels at current scale
+                    r, c = self.grid.world_to_grid(wx, wy)
+                    return int(c * self.scale), int(r * self.scale)
+
+                # Grey for not scanned sectors
+                for ix in range(cols):
+                    for iy in range(rows):
+                        if (ix, iy) in searched:
+                            continue
+                        x0, x1 = float(xs[ix]), float(xs[ix + 1])
+                        y0, y1 = float(ys[iy]), float(ys[iy + 1])
+                        px0, py1 = wc_to_px(x0, y0)
+                        px1, py0 = wc_to_px(x1, y1)
+                        x0c, y0c = min(px0, px1), min(py0, py1)
+                        x1c, y1c = max(px0, px1), max(py0, py1)
+                        cv2.rectangle(overlay, (x0c, y0c), (x1c, y1c), (128, 128, 128), thickness=-1)
+
+                # Green for next sector
+                if next_idx is not None and len(next_idx) == 2:
+                    try:
+                        ix, iy = int(next_idx[0]), int(next_idx[1])
+                        x0, x1 = float(xs[ix]), float(xs[ix + 1])
+                        y0, y1 = float(ys[iy]), float(ys[iy + 1])
+                        px0, py1 = wc_to_px(x0, y0)
+                        px1, py0 = wc_to_px(x1, y1)
+                        x0c, y0c = min(px0, px1), min(py0, py1)
+                        x1c, y1c = max(px0, px1), max(py0, py1)
+                        cv2.rectangle(overlay, (x0c, y0c), (x1c, y1c), (60, 180, 60), thickness=-1)
+                    except Exception:
+                        pass
+
+                # Alpha blend overlay back to vis_bgr
+                alpha = 0.25
+                vis_bgr = cv2.addWeighted(overlay, alpha, vis_bgr, 1 - alpha, 0)
+
+                # Mark the next scan point
+                if next_point is not None and len(next_point) == 2:
+                    try:
+                        px, py = wc_to_px(float(next_point[0]), float(next_point[1]))
+                        cv2.drawMarker(vis_bgr, (px, py), (0, 220, 0), markerType=cv2.MARKER_TILTED_CROSS, markerSize=16, thickness=2)
+                    except Exception:
+                        pass
 
         # Start in green
         if self.start_xy is not None:
