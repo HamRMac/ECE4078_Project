@@ -55,6 +55,10 @@ class Runner(threading.Thread):
         self._plan_waypoints: List[Tuple[float, float]] = []
         self._wp_idx: int = 0
         self._period = 1.0 / max(1.0, float(hz))
+        self._last_plan_time: float = 0.0
+        self._xtrack_thresh: float = 0.15
+        self._replan_period_s: float = 2.5
+        self._last_plan_by_goal: dict[Tuple[float, float], List[Tuple[float, float]]] = {}
 
         # modes: 'IDLE' | 'MANUAL_WAYPOINTS' | 'AUTO'
         # Start in IDLE; GUI can send SwitchMode('AUTO') (e.g., press 'S') to begin SM control
@@ -101,12 +105,61 @@ class Runner(threading.Thread):
             self.world.clear_plan()
             self.world.set_status(action='plan_failed')
             log.warning("Plan failed to goal (%.2f, %.2f)", self._goal[0], self._goal[1])
-            return
+            return False
         self._plan_waypoints = list(pr.pruned_world if pr.pruned_world else pr.path_world)
         self._wp_idx = 0
         self.world.set_plan(self._plan_waypoints, active_idx=self._wp_idx)
         self.world.set_status(action='drive', progress=f"0/{len(self._plan_waypoints)}")
         log.info("Plan OK: %d waypoints (pruned=%s)", len(self._plan_waypoints), "yes" if pr.pruned_world else "no")
+        # Record last plan time and cache plan by goal for fallback
+        self._last_plan_time = time.time()
+        try:
+            key = (round(self._goal[0], 3), round(self._goal[1], 3))
+            self._last_plan_by_goal[key] = list(self._plan_waypoints)
+        except Exception:
+            pass
+        return True
+
+    def _maybe_replan(self, pose):
+        if self._goal is None or not self._plan_waypoints:
+            return
+        # Periodic replan
+        need_replan = (time.time() - self._last_plan_time) >= self._replan_period_s
+        # Cross-track error based replan
+        try:
+            xtrack = AStarPlanner.cross_track_error((pose[0], pose[1]), self._plan_waypoints)
+            if xtrack > self._xtrack_thresh:
+                log.info("Cross-track %.3f > %.3f; triggering replanning", xtrack, self._xtrack_thresh)
+                need_replan = True
+        except Exception:
+            pass
+        if not need_replan:
+            return
+        # Attempt replan
+        prev_plan = list(self._plan_waypoints)
+        prev_wp_idx = self._wp_idx
+        success = self._plan_from_current()
+        if not success:
+            # Fallback to last-known plan towards this goal if available
+            try:
+                key = (round(self._goal[0], 3), round(self._goal[1], 3))
+                cached = self._last_plan_by_goal.get(key)
+                if cached:
+                    self._plan_waypoints = list(cached)
+                    # Keep closest future waypoint as current
+                    self._wp_idx = min(prev_wp_idx, len(self._plan_waypoints) - 1)
+                    self.world.set_plan(self._plan_waypoints, active_idx=self._wp_idx)
+                    self.world.set_status(action='drive', progress=f"{self._wp_idx}/{len(self._plan_waypoints)-1}")
+                    log.info("Replan failed; using cached plan to goal (%.2f, %.2f)", self._goal[0], self._goal[1])
+                else:
+                    # Restore previous plan if no cache
+                    self._plan_waypoints = prev_plan
+                    self._wp_idx = min(prev_wp_idx, len(self._plan_waypoints) - 1)
+                    if self._plan_waypoints:
+                        self.world.set_plan(self._plan_waypoints, active_idx=self._wp_idx)
+                        self.world.set_status(action='drive')
+            except Exception:
+                pass
 
     def _drive_step(self, pose):
         if not self._plan_waypoints:
@@ -200,6 +253,8 @@ class Runner(threading.Thread):
             self.world.set_status(mode='AUTO', sm_state='navigate_to_safe_point', action='begin_drive')
             # If we have a plan, drive a step; otherwise consider arrival
             if self._plan_waypoints:
+                # Periodic and cross-track replanning while following
+                self._maybe_replan(pose)
                 self._drive_step(pose)
             else:
                 # arrived or cannot plan; go back to spin
@@ -224,6 +279,8 @@ class Runner(threading.Thread):
             # 3) control
             if self.mode == 'MANUAL_WAYPOINTS':
                 if self._plan_waypoints:
+                    # Robust replanning
+                    self._maybe_replan(pose)
                     self._drive_step(pose)
             elif self.mode == 'AUTO':
                 self._auto_step(pose)

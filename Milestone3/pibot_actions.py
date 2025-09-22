@@ -405,7 +405,7 @@ class PiBotActions:
         try:
             time.sleep(dur)
             # print fruit collected message in gui
-            self.ppi.collect_fruit(collection_class) # i dont know what this does
+            log.info(f"Collected {collection_class}")
         except Exception as e:
             log.warning("collect_fruit: collector activation failed: %s", e)
 
