@@ -510,6 +510,15 @@ def _parse_args():
     parser.add_argument("--log", type=str, default='INFO', choices=['DEBUG','INFO','WARNING','ERROR','CRITICAL'], help='Logging level')
     parser.add_argument("--model", type=str, default='', help='YOLO model path (optional)')
     parser.add_argument("--use_fusion", action='store_true', help='Fuse bbox-height with bottom-pixel ground-ray for fruit range')
+    # Pose smoothing (control/GUI)
+    parser.add_argument("--pose_smoothing", action='store_true', help='Enable EMA + rate-limited smoothed pose for control/GUI')
+    parser.add_argument("--pose_alpha_pos", type=float, default=0.2, help='EMA alpha for x/y')
+    parser.add_argument("--pose_alpha_yaw", type=float, default=0.2, help='EMA alpha for yaw')
+    parser.add_argument("--pose_rate_xy", type=float, default=0.05, help='Max per-cycle xy step (m)')
+    parser.add_argument("--pose_rate_yaw", type=float, default=10.0, help='Max per-cycle yaw step (deg)')
+    # ArUco EKF gating/adaptive noise
+    parser.add_argument("--aruco_gate", type=float, default=11.34, help='Mahalanobis gating threshold (chi2) for 2D aruco updates')
+    parser.add_argument("--aruco_kd", type=float, default=1.0, help='Adaptive R scale by range: (1 + kd*range^2)')
     parser.add_argument("--level", type=int, default=3, choices=[3,4], help='Logic level: 3 or 4 (default 3)')
     parser.add_argument("--interactive_gui", action='store_true', help='Allow GUI clicks to set manual goals (Runner executes)')
     return parser.parse_known_args()
@@ -582,6 +591,12 @@ def _init_ekf_and_aruco(args):
         log.info("[EKF] Seeded ArUco landmarks from map: %s", args.map)
     except Exception as e:
         log.warning("[EKF] Seeding from map failed: %s", e)
+    # Apply robust update settings
+    try:
+        setattr(ekfInstance, 'aruco_gate', float(args.aruco_gate))
+        setattr(ekfInstance, 'aruco_kd', float(args.aruco_kd))
+    except Exception:
+        pass
     aruco_det = aruco.aruco_detector(ekfInstance.robot, marker_length=0.07)
     log.info("ArUco detector initialised (marker_length=0.07)")
     return ekfInstance, aruco_det
@@ -612,10 +627,53 @@ def _init_perception(args, ekfInstance):
 
 
 def _make_pose_fn(args, penguinpiInstance, aruco_detector, ekfInstance):
+    # Optional smoothed pose wrapper (EMA + rate limits)
+    class _SmoothedPose:
+        def __init__(self, alpha_pos: float, alpha_yaw: float, max_xy: float, max_yaw_deg: float):
+            self.alpha_p = float(max(0.0, min(1.0, alpha_pos)))
+            self.alpha_y = float(max(0.0, min(1.0, alpha_yaw)))
+            self.max_xy = float(max_xy)
+            self.max_yaw = float(max_yaw_deg) * np.pi / 180.0
+            self.prev = None
+
+        @staticmethod
+        def _wrap(theta):
+            return (theta + np.pi) % (2*np.pi) - np.pi
+
+        def step(self, raw):
+            x, y, th = float(raw[0]), float(raw[1]), float(raw[2])
+            if self.prev is None:
+                self.prev = (x, y, th)
+                return [x, y, th]
+            px, py, pth = self.prev
+            # EMA
+            sx = self.alpha_p * x + (1 - self.alpha_p) * px
+            sy = self.alpha_p * y + (1 - self.alpha_p) * py
+            dth = self._wrap(th - pth)
+            sth = self._wrap(pth + self.alpha_y * dth)
+            # Rate limit
+            dx = np.clip(sx - px, -self.max_xy, self.max_xy)
+            dy = np.clip(sy - py, -self.max_xy, self.max_xy)
+            dth_rl = np.clip(self._wrap(sth - pth), -self.max_yaw, self.max_yaw)
+            out = (px + dx, py + dy, self._wrap(pth + dth_rl))
+            self.prev = out
+            return [out[0], out[1], out[2]]
+
+    smoother = None
+    if bool(args.pose_smoothing):
+        smoother = _SmoothedPose(args.pose_alpha_pos, args.pose_alpha_yaw, args.pose_rate_xy, args.pose_rate_yaw)
+
     def _get_pose():
         if args.no_run or args.ip == 'localhost':
-            return [0.0, 0.0, 0.0]
-        return get_robot_pose(penguinpiInstance, aruco_detector, ekfInstance)
+            pose = [0.0, 0.0, 0.0]
+        else:
+            pose = get_robot_pose(penguinpiInstance, aruco_detector, ekfInstance)
+        if smoother is not None:
+            try:
+                return smoother.step(pose)
+            except Exception:
+                return pose
+        return pose
     return _get_pose
 
 

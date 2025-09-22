@@ -287,6 +287,7 @@ class RunnerL3(threading.Thread):
 
         Returns True if we executed a beeline and ended within stop_radius_m; False otherwise.
         """
+        log.info("Attempting beeline to %s at (%.2f, %.2f)", target_name, target_xy[0], target_xy[1])
         pose = self.get_pose_fn()
         rx, ry = float(pose[0]), float(pose[1])
         tx, ty = float(target_xy[0]), float(target_xy[1])
@@ -310,6 +311,7 @@ class RunnerL3(threading.Thread):
         self._wp_idx = 0
         self.world.set_plan(self._plan_waypoints, active_idx=self._wp_idx)
         self.world.set_status(mode='AUTO', sm_state='L3', action='beeline', target=target_name)
+        log.debug("Beeline to %s at (%.2f, %.2f) from (%.2f, %.2f)", target_name, tx, ty, rx, ry)
         t0 = time.time()
         timeout = 8.0  # safety cap for straight drive
         while not self._stop.is_set() and self._plan_waypoints:

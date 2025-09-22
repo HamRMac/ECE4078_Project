@@ -38,6 +38,9 @@ class EKF:
         # Static covariance for the robot's motion model
         # Added each time predict is called
         self.static_covariance = 5e-3
+        # Robust ArUco update settings (can be overridden by caller)
+        self.aruco_gate: float = 11.34  # chi2 gate (2D) ~99%
+        self.aruco_kd: float = 1.0      # adaptive R scale: (1 + kd*range^2)
 
         # Graphics assets
         self.lm_pics = []
@@ -196,32 +199,60 @@ class EKF:
         if not known_meas:
             return
 
-        # Construct measurement index list for known measurements only
-        tags = [lm.tag for lm in known_meas]
-        idx_list = [self.taglist.index(tag) for tag in tags]
+        # Per-measurement gating and adaptive R
+        inliers = []
+        idxs = []
+        Rs = []
+        for lm in known_meas:
+            try:
+                idx = self.taglist.index(lm.tag)
+            except ValueError:
+                continue
+            # Predicted measurement and Jacobian for this tag
+            zhat_i = self.robot.measure(self.markers, [idx]).reshape((2,1), order='F')
+            H_i = self.robot.derivative_measure(self.markers, [idx])
+            z_i = lm.position.reshape((2,1))
+            R_i = lm.covariance.copy()
+            # Adaptive R based on range (norm of body-frame measurement)
+            try:
+                rng = float(np.linalg.norm(z_i))
+                scale = 1.0 + max(0.0, float(self.aruco_kd)) * (rng * rng)
+                R_i = R_i * float(scale)
+            except Exception:
+                pass
+            # Innovation gating
+            y_i = z_i - zhat_i
+            S_i = H_i @ self.P @ H_i.T + R_i
+            try:
+                d2 = float(y_i.T @ np.linalg.inv(S_i) @ y_i)
+            except Exception:
+                d2 = 0.0
+            if d2 <= float(self.aruco_gate):
+                inliers.append((z_i, H_i, R_i))
+                idxs.append(idx)
+                Rs.append(R_i)
+            else:
+                # reject outlier silently
+                continue
 
-        # Stack measurements and set covariance
-        z = np.concatenate([lm.position.reshape(-1,1) for lm in known_meas], axis=0)
-        Rm = np.zeros((2*len(known_meas), 2*len(known_meas)))
-        for i, lm in enumerate(known_meas):
-            Rm[2*i:2*i+2, 2*i:2*i+2] = lm.covariance
+        if not inliers:
+            return
 
-        # Compute own measurements
-        z_hat = self.robot.measure(self.markers, idx_list)
-        z_hat = z_hat.reshape((-1,1),order="F")
-        H = self.robot.derivative_measure(self.markers, idx_list)
+        # Stack inliers
+        z = np.concatenate([zi for (zi, _, _) in inliers], axis=0)
+        H = np.concatenate([Hi for (_, Hi, _) in inliers], axis=0)
+        Rm = np.zeros((2*len(inliers), 2*len(inliers)))
+        for i, R_i in enumerate(Rs):
+            Rm[2*i:2*i+2, 2*i:2*i+2] = R_i
 
         x = self.get_state_vector()
-        
-        y = z - z_hat # Perform update
-        S = H @ self.P @ H.T + Rm # Update covariance
-        K = self.P @ H.T @ np.linalg.inv(S) # Calculate Kalman gain
-
+        y = z - self.robot.measure(self.markers, idxs).reshape((-1,1), order='F')
+        S = H @ self.P @ H.T + Rm
+        K = self.P @ H.T @ np.linalg.inv(S)
         x_new = x + K @ y
         I = np.eye(self.P.shape[0])
         self.P = (I - K @ H) @ self.P @ (I - K @ H).T + K @ Rm @ K.T
-        self.P = 0.5*(self.P + self.P.T) # Enforce symmetry
-
+        self.P = 0.5 * (self.P + self.P.T)
         self.set_state_vector(x_new)
 
 
