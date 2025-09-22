@@ -14,6 +14,8 @@ class Detector:
         self.model = YOLO(model_path)
         self.imgsz = int(imgsz)
         self.max_batch = 8
+        # IoU threshold for suppressing overlapping boxes: keep highest-confidence
+        self.overlap_iou_thresh = 0.5
 
         self.class_colour = {
             'orange': (0, 165, 255),
@@ -79,20 +81,34 @@ class Detector:
             predictions = self.model.predict(chunk, imgsz=self.imgsz, verbose=False)
             # predictions is a list aligned with chunk
             for pred, src in zip(predictions, chunk):
-                boxes_out = []
                 img_out = deepcopy(src)
                 boxes = pred.boxes
+                # Collect boxes with confidence for suppression
+                items = []  # each: {label: str, xywh: np.ndarray(4,), conf: float}
                 for box in boxes:
-                    box_cord = box.xywh[0]
-                    box_label = box.cls
-                    label_str = pred.names[int(box_label)]
-                    boxes_out.append([label_str, np.asarray(box_cord)])
-                    # Draw
-                    xyxy = ops.xywh2xyxy(box_cord)
+                    box_cord = np.asarray(box.xywh[0])
+                    box_label = int(box.cls)
+                    conf = float(box.conf[0]) if hasattr(box, 'conf') else 1.0
+                    label_str = pred.names[box_label]
+                    items.append({
+                        'label': label_str,
+                        'xywh': box_cord.astype(float),
+                        'conf': conf
+                    })
+
+                # Suppress overlapping boxes (keep highest-confidence)
+                kept = self._suppress_overlaps(items, self.overlap_iou_thresh)
+
+                # Prepare outputs and draw
+                boxes_out = []
+                for it in kept:
+                    boxes_out.append([it['label'], it['xywh']])
+                    xyxy = ops.xywh2xyxy(it['xywh'])
                     x1, y1, x2, y2 = map(int, [xyxy[0], xyxy[1], xyxy[2], xyxy[3]])
-                    colour = self.class_colour.get(label_str, (200, 200, 200))
+                    colour = self.class_colour.get(it['label'], (200, 200, 200))
                     img_out = cv2.rectangle(img_out, (x1, y1), (x2, y2), colour, thickness=2)
-                    img_out = cv2.putText(img_out, label_str, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, colour, 2)
+                    img_out = cv2.putText(img_out, it['label'], (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, colour, 2)
+
                 results_all.append((boxes_out, img_out))
         return results_all
 
@@ -111,19 +127,74 @@ class Detector:
 
         predictions = self.model.predict(cv_img, imgsz=self.imgsz, verbose=False)
 
-        # get bounding box and class label for target(s) detected
-        bounding_boxes = []
+        # Collect boxes with confidence for suppression
+        items = []  # each: {label: str, xywh: np.ndarray(4,), conf: float}
         for prediction in predictions:
             boxes = prediction.boxes
             for box in boxes:
-                # bounding format in [x, y, width, height]
-                box_cord = box.xywh[0]
+                box_cord = np.asarray(box.xywh[0])
+                box_label = int(box.cls)
+                conf = float(box.conf[0]) if hasattr(box, 'conf') else 1.0
+                items.append({
+                    'label': prediction.names[box_label],
+                    'xywh': box_cord.astype(float),
+                    'conf': conf
+                })
 
-                box_label = box.cls  # class label of the box
+        # Suppress overlapping boxes (keep highest-confidence)
+        kept = self._suppress_overlaps(items, self.overlap_iou_thresh)
 
-                bounding_boxes.append([prediction.names[int(box_label)], np.asarray(box_cord)])
-
+        # Return in original format: [label, [x,y,w,h]]
+        bounding_boxes = [[it['label'], it['xywh']] for it in kept]
         return bounding_boxes
+
+    def _suppress_overlaps(self, items, iou_thresh=0.5):
+        """Greedy suppression across all classes by IoU, keeping highest-confidence.
+
+        items: list of dicts with keys: 'label' (str), 'xywh' (np.ndarray[4]), 'conf' (float)
+        Returns a filtered list of items.
+        """
+        if not items:
+            return []
+
+        # Sort by confidence descending
+        sorted_items = sorted(items, key=lambda d: d['conf'], reverse=True)
+        kept = []
+        for cand in sorted_items:
+            keep = True
+            for k in kept:
+                if self._iou_xywh(cand['xywh'], k['xywh']) > iou_thresh:
+                    keep = False
+                    break
+            if keep:
+                kept.append(cand)
+        return kept
+
+    @staticmethod
+    def _iou_xywh(a, b):
+        """Compute IoU between two boxes in xywh (center x,y,width,height) format."""
+        # Convert to xyxy
+        ax, ay, aw, ah = float(a[0]), float(a[1]), float(a[2]), float(a[3])
+        bx, by, bw, bh = float(b[0]), float(b[1]), float(b[2]), float(b[3])
+        ax1, ay1 = ax - aw / 2.0, ay - ah / 2.0
+        ax2, ay2 = ax + aw / 2.0, ay + ah / 2.0
+        bx1, by1 = bx - bw / 2.0, by - bh / 2.0
+        bx2, by2 = bx + bw / 2.0, by + bh / 2.0
+
+        inter_x1 = max(ax1, bx1)
+        inter_y1 = max(ay1, by1)
+        inter_x2 = min(ax2, bx2)
+        inter_y2 = min(ay2, by2)
+        inter_w = max(0.0, inter_x2 - inter_x1)
+        inter_h = max(0.0, inter_y2 - inter_y1)
+        inter_area = inter_w * inter_h
+
+        area_a = max(0.0, aw) * max(0.0, ah)
+        area_b = max(0.0, bw) * max(0.0, bh)
+        union = area_a + area_b - inter_area
+        if union <= 0.0:
+            return 0.0
+        return inter_area / union
 
 
 # FOR TESTING ONLY
