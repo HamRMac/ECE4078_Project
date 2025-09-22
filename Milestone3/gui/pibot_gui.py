@@ -66,6 +66,8 @@ class PiBotGUI:
         plan_provider=None,
         detections_provider=None,
         status_provider=None,
+        # Intent helpers for runtime control
+        mode_sink=None,
     ) -> None:
         """
         Parameters
@@ -98,6 +100,7 @@ class PiBotGUI:
         self.plan_provider = plan_provider
         self.detections_provider = detections_provider
         self.status_provider = status_provider
+        self.mode_sink = mode_sink
 
         # Interactive state
         self.goal_xy: Optional[Tuple[float, float]] = None
@@ -302,6 +305,13 @@ class PiBotGUI:
                     running = False
                 elif event.type == pygame.KEYDOWN and event.key == pygame.K_d:
                     pdb.set_trace()
+                elif event.type == pygame.KEYDOWN and event.key == pygame.K_s:
+                    # Start state machine (switch to AUTO mode)
+                    if callable(self.mode_sink):
+                        try:
+                            self.mode_sink('AUTO')
+                        except Exception:
+                            pass
                 elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1 and self.interactive:
                     # Left-click: emit intent if sink provided; else plan locally as before
                     mx, my = pygame.mouse.get_pos()
@@ -380,12 +390,11 @@ class PiBotGUI:
                                 results.append({"class_id": cid, "range": rng, "theta": th})
                     # Print JSON line for this frame
                     try:
-                        sys.stdout.write(json.dumps(results) + "\n")
-                        sys.stdout.flush()
+                        log.debug(json.dumps(results) + "\n")
                     except Exception as e:
-                        sys.stderr.write(f"json_error: {e}\n")
+                        log.debug(f"json_error: {e}\n")
                 except Exception as e:
-                    sys.stderr.write(f"detector_error: {e}\n")
+                    log.error(f"detector_error: {e}\n")
 
                 # Draw the camera panel on the right
                 try:

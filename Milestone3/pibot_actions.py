@@ -73,8 +73,14 @@ class PiBotActions:
         - pause_s: pause between steps to allow sensing.
         """
         # Validate we have values for all parameters
-        if not all([detector, fruit_ranger, target_dims, get_pose_fn]):
-            log.error("scan: missing required parameters.")
+        missing = [name for name, value in {
+            "detector": detector,
+            "fruit_ranger": fruit_ranger,
+            "target_dims": target_dims,
+            "get_pose_fn": get_pose_fn,
+        }.items() if value is None]
+        if missing:
+            log.error(f"scan: missing required parameters {missing}")
             return
 
         # ------------------------------

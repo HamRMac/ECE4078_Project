@@ -36,7 +36,7 @@ from state_machine.state_machine import PiBotFruitSearchSM
 from runtime.world_model import WorldModel
 from runtime.robot_commander import RobotCommander
 from runtime.runner import Runner
-from runtime.intents import SetGoal
+from runtime.intents import SetGoal, SwitchMode
 
 # Module logger
 log = logging.getLogger(__name__)
@@ -580,8 +580,13 @@ def _init_perception(args, ekfInstance):
         target_dims_Dict = TARGET_DIMS
         if args.model:
             from YOLO.detector import Detector
-            yoloDetectorInstance = Detector(args.model, 384)
-            log.info("YOLO model loaded: %s", args.model)
+            # Verify the model exists
+            if not os.path.exists(args.model):
+                log.error("YOLO model file not found: %s", args.model)
+                yoloDetectorInstance = None
+            else:
+                yoloDetectorInstance = Detector(args.model, 384)
+                log.info("YOLO model loaded: %s", args.model)
     except Exception as e:
         log.warning("Live detection initialisation issue: %s", e)
     return yoloDetectorInstance, fruitRangerInstance, target_dims_Dict
@@ -686,6 +691,9 @@ def main():
     def _intent_sink(gx: float, gy: float):
         intents_q.put(SetGoal(gx, gy))
 
+    def _mode_sink(mode: str):
+        intents_q.put(SwitchMode(mode))
+
     guiInstance = PiBotGUI(
         grid=gridMapInstance,
         ppi=penguinpiInstance,
@@ -705,6 +713,7 @@ def main():
         intent_sink=_intent_sink if args.interactive_gui else None,
         plan_provider=_plan_provider,
         status_provider=_status_provider,
+        mode_sink=_mode_sink,
     )
 
     log.info("Launching PiBotGUI (display-only)")

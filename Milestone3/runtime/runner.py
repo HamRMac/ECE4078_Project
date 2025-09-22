@@ -34,6 +34,7 @@ class Runner(threading.Thread):
                  fruit_ranger=None,
                  target_dims=None):
         super().__init__(daemon=True, name="Runner")
+        log.info("Runner initialized")
         self.cmd = commander
         self.ekf = ekf
         self.aruco = aruco_det
@@ -56,7 +57,8 @@ class Runner(threading.Thread):
         self._period = 1.0 / max(1.0, float(hz))
 
         # modes: 'IDLE' | 'MANUAL_WAYPOINTS' | 'AUTO'
-        self.mode = 'AUTO' if self.sm is not None else 'IDLE'
+        # Start in IDLE; GUI can send SwitchMode('AUTO') (e.g., press 'S') to begin SM control
+        self.mode = 'IDLE'
 
     def stop(self):
         self._stop.set()
@@ -153,19 +155,20 @@ class Runner(threading.Thread):
                 try:
                     # conservative scan parameters; pass detector/ranger/target_dims if available
                     self.actions.scan(
-                        step_angle_deg=20.0,
+                        step_angle_deg=30.0,
                         detector=self.detector,
                         fruit_ranger=self.fruit_ranger,
                         target_dims=self.target_dims,
                         get_pose_fn=self.get_pose_fn,
-                        turning_tick=25,
-                        pause_s=0.3,
+                        turning_tick=40,
+                        pause_s=1.0,
                     )
                     # Publish detections (clustered) to world model if available
                     try:
                         dets = getattr(self.actions, 'current_obj_positions', []) or []
                         self.world.set_detections(dets)
                         log.info("Scan complete: %d clustered objects", len(dets))
+                        log.info("Detected object positions: %s", dets)
                     except Exception:
                         pass
                 except Exception:
@@ -202,7 +205,8 @@ class Runner(threading.Thread):
                 # arrived or cannot plan; go back to spin
                 log.info("SM: NavigateToSafePoint → Scan")
                 try:
-                    self.sm.T_navigate_to_safe_point_to_scan()
+                    self.mode = 'IDLE'
+                    #self.sm.T_navigate_to_safe_point_to_scan()
                 except Exception:
                     pass
         else:
