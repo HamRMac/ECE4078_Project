@@ -80,7 +80,7 @@ def diameter_to_scatter(diameter_m, ax):
     return (diameter_m*scale)**2
 
 # --- Robot / visibility ---
-heading_rad = 0
+heading_rad = np.pi/2
 light_pos = (0,0)
 fov_deg = 360
 fov_half = fov_deg/2
@@ -125,19 +125,26 @@ red_border_mask = (red_border_mask).flatten()
 
 safety_mask = visible_mask & (~red_border_mask)
 
-# --- Sector analysis ---
-sector_size = 0.8
-num_sectors_x = num_sectors_y = 3
-sector_x_edges = [xmin+i*sector_size for i in range(num_sectors_x+1)]
-sector_y_edges = [ymin+i*sector_size for i in range(num_sectors_y+1)]
-sector_dark_fraction = np.zeros((num_sectors_y,num_sectors_x))
+
+import numpy as np
+
+# --- Hardcoded sector edges ---
+sector_x_edges = [-1.2, -0.4, 0.4, 1.2]
+sector_y_edges = [-1.2, -0.4, 0.4, 1.2]
+num_sectors_x = len(sector_x_edges) - 1
+num_sectors_y = len(sector_y_edges) - 1
+
+# Placeholder: xx, yy are your coordinates; visibility is your mask
+sector_dark_fraction = np.zeros((num_sectors_y, num_sectors_x))
+
 for ix in range(num_sectors_x):
     for iy in range(num_sectors_y):
-        x0,x1 = sector_x_edges[ix], sector_x_edges[ix+1]
-        y0,y1 = sector_y_edges[iy], sector_y_edges[iy+1]
-        mask = (xx>=x0)&(xx<x1)&(yy>=y0)&(yy<y1)
+        x0, x1 = sector_x_edges[ix], sector_x_edges[ix+1]
+        y0, y1 = sector_y_edges[iy], sector_y_edges[iy+1]
+        mask = (xx >= x0) & (xx < x1) & (yy >= y0) & (yy < y1)
         dots = visibility[mask]
-        sector_dark_fraction[iy,ix] = np.sum(dots!=1)/len(dots) if len(dots)>0 else 0
+        sector_dark_fraction[iy, ix] = np.sum(dots != 1) / len(dots) if len(dots) > 0 else 0
+
 
 # --- Plot ---
 plt.figure(figsize=(8,8))
