@@ -211,6 +211,24 @@ class GridMap:
         self._clearance_cache = clearance_m
         return self._clearance_cache
 
+    def clearance_map_static(self) -> np.ndarray:
+        """Clearance map computed only against static obstacles (metres).
+
+        Useful when you want to bias paths away from hard/static obstacles while
+        allowing proximity to unknown/safety-marked regions.
+        """
+        if self.static_layer is None:
+            raise AssertionError("Grid not built yet.")
+        # Cache separately from combined clearance
+        if hasattr(self, '_clearance_cache_static') and self._clearance_cache_static is not None:
+            return self._clearance_cache_static  # type: ignore[attr-defined]
+        import cv2
+        free_mask = (self.static_layer == 0).astype(np.uint8)
+        dist_cells = cv2.distanceTransform(free_mask, cv2.DIST_L2, 3)
+        clearance_m = dist_cells * float(self.res)
+        self._clearance_cache_static = clearance_m  # type: ignore[attr-defined]
+        return clearance_m
+
     # ---------------- Visualisation ----------------
     def render(self, scale: int = 3) -> np.ndarray:
         """Return a BGR image for visualisation of the occupancy grid."""

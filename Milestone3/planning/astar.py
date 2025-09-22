@@ -38,7 +38,8 @@ class AStarPlanner:
                  clearance_weight: float = 0.0,
                  clearance_epsilon: float = 0.02,
                  clearance_power: float = 1.0,
-                 min_prune_clearance: float = 0.0):
+                 min_prune_clearance: float = 0.0,
+                 clearance_from_static: bool = False):
         """
         Parameters
         - occupancy_threshold: cells with value > occ_th are blocked
@@ -55,6 +56,7 @@ class AStarPlanner:
         self.clear_eps = float(clearance_epsilon)
         self.clear_pow = float(clearance_power)
         self.min_prune_clear = float(min_prune_clearance)
+        self.clear_from_static = bool(clearance_from_static)
 
     # --------------- Core A* ---------------
     @staticmethod
@@ -101,7 +103,7 @@ class AStarPlanner:
         clearance = None
         if self.clear_w > 0.0:
             try:
-                clearance = grid.clearance_map()
+                clearance = grid.clearance_map_static() if self.clear_from_static else grid.clearance_map()
             except Exception:
                 clearance = None  # fail-safe to original costs
 

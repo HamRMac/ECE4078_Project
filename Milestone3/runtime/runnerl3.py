@@ -93,11 +93,12 @@ class RunnerL3(threading.Thread):
         dx, dy = (a[0] - b[0]), (a[1] - b[1])
         return float((dx * dx + dy * dy) ** 0.5)
 
-    def _apply_static_target_exclusions(self, positions: List[Tuple[float, float]], fruit_radius_m: float = 0.05):
+    def _apply_static_target_exclusions(self, positions: List[Tuple[float, float]], fruit_radius_m: float = 0.01):
         import cv2
         if self.grid.static_layer is None or self.grid.size is None:
             return
-        inflate_r = float(fruit_radius_m) + float(self.grid.robot_radius) + float(self.grid.inflation_margin)
+        # For L3 request: use a small fixed buffer around targets (~1 cm)
+        inflate_r = float(fruit_radius_m)
         rc = max(1, int(math.ceil(inflate_r / float(self.grid.res))))
         for (x, y) in positions or []:
             r, c = self.grid.world_to_grid(float(x), float(y))
