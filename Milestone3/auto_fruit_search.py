@@ -677,7 +677,8 @@ def main():
                     actions=actions,
                     detector=yoloDetectorInstance,
                     fruit_ranger=fruitRangerInstance,
-                    target_dims=target_dims_Dict)
+                    target_dims=target_dims_Dict,
+                    aruco_positions=aruco_true_pos)
     runner.start()
 
     # Providers for GUI (display-only)

@@ -48,6 +48,8 @@ class GridMap:
         # Layers: 0 free, 255 occupied
         self.static_layer: Optional[np.ndarray] = None
         self.dynamic_layer: Optional[np.ndarray] = None
+        # Observed-free layer (255 = free by visibility); clears occupancy in combined()
+        self.free_layer: Optional[np.ndarray] = None
 
         # Cached clearance map (metres) computed from combined occupancy
         self._clearance_cache: Optional[np.ndarray] = None
@@ -126,6 +128,7 @@ class GridMap:
 
         self.static_layer = np.zeros((H, W), dtype=np.uint8)
         self.dynamic_layer = np.zeros((H, W), dtype=np.uint8)
+        self.free_layer = np.zeros((H, W), dtype=np.uint8)
 
         # Invalidate clearance cache
         self._clearance_cache = None
@@ -161,7 +164,13 @@ class GridMap:
 
     def combined(self) -> np.ndarray:
         assert self.static_layer is not None and self.dynamic_layer is not None, "Grid not built yet."
-        return np.maximum(self.static_layer, self.dynamic_layer)
+        occ = np.maximum(self.static_layer, self.dynamic_layer)
+        # Clear occupancy by observed-free evidence (where free_layer==255)
+        if self.free_layer is not None:
+            mask = (self.free_layer == 255)
+            occ = occ.copy()
+            occ[mask] = 0
+        return occ
 
     # ---------------- Clearance ----------------
     def clearance_map(self) -> np.ndarray:
@@ -231,3 +240,18 @@ class GridMap:
             pass
         """
         return vis
+
+    # ---------------- Free-space updates ----------------
+    def clear_free(self):
+        assert self.free_layer is not None, "Grid not built yet."
+        self.free_layer.fill(0)
+
+    def apply_free_mask(self, free_mask: np.ndarray):
+        """OR a boolean/uint8 mask (grid-aligned) into observed-free layer.
+
+        free_mask True/255 means observed free.
+        """
+        assert self.free_layer is not None, "Grid not built yet."
+        if free_mask.dtype != np.uint8:
+            free_mask = free_mask.astype(np.uint8) * 255
+        self.free_layer = np.maximum(self.free_layer, free_mask)
