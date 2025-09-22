@@ -771,6 +771,7 @@ def main():
         detections_provider=_detections_provider,
         sector_provider=_sector_provider,
         mode_sink=_mode_sink,
+        targets_provider=world.get_targets_info,
     )
 
     log.info("Launching PiBotGUI (display-only)")

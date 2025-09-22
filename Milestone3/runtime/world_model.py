@@ -24,6 +24,8 @@ class WorldModel:
             "collected": [],           # list of fruit names
             "seen_not_collected": [],  # list of fruit names
             "unseen": [],              # list of fruit names
+            "active": None,            # currently active target name
+            "positions": {},           # all known target positions: fruit -> (x,y)
         }
 
     # Pose
@@ -89,7 +91,9 @@ class WorldModel:
 
     # Targets info
     def set_targets_info(self, order: List[str], remaining: Dict[str, Tuple[float, float]],
-                         collected: List[str], seen_not_collected: List[str], unseen: List[str]) -> None:
+                         collected: List[str], seen_not_collected: List[str], unseen: List[str],
+                         active: Optional[str] = None,
+                         positions: Optional[Dict[str, Tuple[float, float]]] = None) -> None:
         with self._lock:
             self._targets_info = {
                 "order": list(order or []),
@@ -97,6 +101,8 @@ class WorldModel:
                 "collected": list(collected or []),
                 "seen_not_collected": list(seen_not_collected or []),
                 "unseen": list(unseen or []),
+                "active": None if active is None else str(active),
+                "positions": {str(k): (float(v[0]), float(v[1])) for k, v in (positions or {}).items()},
             }
 
     def get_targets_info(self) -> Dict[str, Any]:

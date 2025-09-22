@@ -70,6 +70,8 @@ class PiBotGUI:
         mode_sink=None,
         # Sector overlay provider
         sector_provider=None,
+        # Targets overlay provider (shopping list + known positions)
+        targets_provider=None,
     ) -> None:
         """
         Parameters
@@ -104,6 +106,7 @@ class PiBotGUI:
         self.status_provider = status_provider
         self.mode_sink = mode_sink
         self.sector_provider = sector_provider
+        self.targets_provider = targets_provider
 
         # Interactive state
         self.goal_xy: Optional[Tuple[float, float]] = None
@@ -386,10 +389,59 @@ class PiBotGUI:
                 ix1, iy1 = ix0 + (x1c - x0c), iy0 + (y1c - y0c)
                 icon_crop = icon[iy0:iy1, ix0:ix1]
                 if icon_crop.shape[2] == 4:
-                    alpha = icon_crop[:, :, 3:] / 255.0
+                    # Reduce opacity to 50% irrespective of source alpha
+                    alpha = (icon_crop[:, :, 3:] / 255.0) * 0.5
                     roi[:] = (1 - alpha) * roi + alpha * icon_crop[:, :, :3]
                 else:
-                    roi[:] = icon_crop
+                    # No alpha: simple 0.5 blend
+                    roi[:] = (0.5 * roi + 0.5 * icon_crop).astype(roi.dtype)
+
+        # Draw target fruits overlay (always on top) with green outline
+        try:
+            targets = self.targets_provider() if callable(self.targets_provider) else None
+        except Exception:
+            targets = None
+        if isinstance(targets, dict):
+            # Expect WorldModel.get_targets_info() shape
+            remaining = targets.get('remaining', {}) or {}
+            order = targets.get('order', []) or []
+            collected = targets.get('collected', []) or []
+            active = targets.get('active', None)
+            positions = targets.get('positions', {}) or {}
+
+            # Draw remaining (including active) in shopping list order for determinism
+            order_remaining = [n for n in order if n in remaining]
+            order_remaining += [n for n in remaining.keys() if n not in order_remaining]
+            for name in order_remaining:
+                try:
+                    xy = remaining.get(name)
+                    if not isinstance(xy, (list, tuple)) or len(xy) < 2:
+                        continue
+                    rr, cc = self.grid.world_to_grid(float(xy[0]), float(xy[1]))
+                    cx, cy = int(cc * self.scale), int(rr * self.scale)
+                    # Color by state: green=active, red=not done
+                    color = (0, 220, 0) if (active is not None and str(name) == str(active)) else (0, 0, 220)
+                    cv2.circle(vis_bgr, (cx, cy), 10, color, thickness=2, lineType=cv2.LINE_AA)
+                    # Label
+                    cv2.putText(vis_bgr, str(name)[:10], (cx + 12, cy - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 0, 0), 2, cv2.LINE_AA)
+                    cv2.putText(vis_bgr, str(name)[:10], (cx + 12, cy - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1, cv2.LINE_AA)
+                except Exception:
+                    continue
+            # Draw collected in blue
+            for name in collected:
+                # Use known positions mapping to draw completed targets
+                xy = positions.get(name) if isinstance(positions, dict) else None
+                if not isinstance(xy, (list, tuple)) or len(xy) < 2:
+                    continue
+                try:
+                    rr, cc = self.grid.world_to_grid(float(xy[0]), float(xy[1]))
+                    cx, cy = int(cc * self.scale), int(rr * self.scale)
+                    color = (220, 0, 0)  # blue in BGR
+                    cv2.circle(vis_bgr, (cx, cy), 10, color, thickness=2, lineType=cv2.LINE_AA)
+                    cv2.putText(vis_bgr, str(name)[:10], (cx + 12, cy - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 0, 0), 2, cv2.LINE_AA)
+                    cv2.putText(vis_bgr, str(name)[:10], (cx + 12, cy - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1, cv2.LINE_AA)
+                except Exception:
+                    continue
 
         # Convert BGR numpy image to PyGame surface and blit
         vis_rgb = cv2.cvtColor(vis_bgr, cv2.COLOR_BGR2RGB)

@@ -74,7 +74,7 @@ class RunnerL3(threading.Thread):
         self._plan_waypoints: List[Tuple[float, float]] = []
         self._wp_idx: int = 0
         self._period = 1.0 / max(1.0, float(hz))
-        self._xtrack_thresh: float = 0.15
+        self._xtrack_thresh: float = 0.05
         self._just_replanned: bool = False
 
         # Ordered route derived from shopping list
@@ -299,10 +299,39 @@ class RunnerL3(threading.Thread):
         except Exception:
             pass
 
+        # Publish targets info to WorldModel for GUI overlay
+        try:
+            order = list(self.shopping_list or [])
+            remaining = {name: (float(xy[0]), float(xy[1])) for name, xy in self._route}
+            positions = {str(k): (float(v[0]), float(v[1])) for k, v in self.known_targets.items()}
+            self.world.set_targets_info(order=order,
+                                        remaining=remaining,
+                                        collected=[],
+                                        seen_not_collected=list(remaining.keys()),
+                                        unseen=[n for n in order if n not in remaining],
+                                        active=None,
+                                        positions=positions)
+        except Exception:
+            pass
+
         # Visit targets in order with scan → approach loop
         for idx, (name, txy) in enumerate(self._route):
+            log.info("Heading to target %d/%d: %s at (%.2f, %.2f)", idx + 1, len(self._route), name, txy[0], txy[1])
             if self._stop.is_set():
                 break
+            # Mark this as the active target in the world model
+            try:
+                info = self.world.get_targets_info()
+                self.world.set_targets_info(order=info.get('order', []),
+                                            remaining=info.get('remaining', {}),
+                                            collected=info.get('collected', []),
+                                            seen_not_collected=info.get('seen_not_collected', []),
+                                            unseen=info.get('unseen', []),
+                                            active=name,
+                                            positions=info.get('positions', {}))
+            except Exception:
+                pass
+
             attempt = 0
             while not self._stop.is_set():
                 # 1) Scan
@@ -313,6 +342,27 @@ class RunnerL3(threading.Thread):
                 if dist <= 0.25:
                     print(f"Reached {name}")
                     time.sleep(2.0)
+                    # Update targets info: mark as collected
+                    try:
+                        info = self.world.get_targets_info()
+                        remaining = dict(info.get('remaining', {}))
+                        if name in remaining:
+                            del remaining[name]
+                        collected = list(info.get('collected', []))
+                        if name not in collected:
+                            collected.append(name)
+                        order = list(info.get('order', []))
+                        seen = [n for n in remaining.keys()]
+                        unseen = [n for n in order if (n not in remaining) and (n not in collected)]
+                        self.world.set_targets_info(order=order,
+                                                    remaining=remaining,
+                                                    collected=collected,
+                                                    seen_not_collected=seen,
+                                                    unseen=unseen,
+                                                    active=None,
+                                                    positions=info.get('positions', {}))
+                    except Exception:
+                        pass
                     break  # next target
                 # 2) Plan: get as close as possible
                 planned = self._plan_best_approach_to_target(txy)
@@ -320,9 +370,6 @@ class RunnerL3(threading.Thread):
                     log.info("No path found yet towards %s; rescanning", name)
                     time.sleep(0.5)
                     attempt += 1
-                    if attempt > 8:
-                        # Still must not skip — continue scanning/planning
-                        attempt = 0
                     continue
                 # 3) Drive this plan
                 while not self._stop.is_set() and self._plan_waypoints:
