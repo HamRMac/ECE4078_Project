@@ -428,20 +428,20 @@ class PiBotActions:
 
     def collect_fruit(self,
                       collection_class: str = "default",
-                      duration_s: float = 2.1) -> None:
+                      duration_s: float = 2.5) -> None:
         """Sit next to fruit to collect for duration_s seconds. Prints fruit collected message in gui"""
         try:
             dur = max(0.1, float(duration_s))
         except Exception:
-            dur = 2.1
+            dur = 2.5
 
-        log.info("collect_fruit: activating collector for %.1f s", dur)
         try:
+            log.info(f"collecting {collection_class}...")
             time.sleep(dur)
             # print fruit collected message in gui
-            log.info(f"Collected {collection_class}")
+            log.info(f"Collected {collection_class}!")
         except Exception as e:
-            log.warning("collect_fruit: collector activation failed: %s", e)
+            log.warning("collect_fruit: collector failed: %s", e)
 
 
     def return_to_scan_point(self,

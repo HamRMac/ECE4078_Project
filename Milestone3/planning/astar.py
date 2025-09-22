@@ -109,9 +109,12 @@ class AStarPlanner:
         if not (0 <= s[0] < H and 0 <= s[1] < W and 0 <= g[0] < H and 0 <= g[1] < W):
             log.warning("A*: start or goal out of bounds s=%s g=%s size=(%d,%d)", str(s), str(g), H, W)
             return None
-        if not self._is_free(occ, s) or not self._is_free(occ, g):
-            log.info("A*: start or goal blocked s_free=%s g_free=%s", self._is_free(occ, s), self._is_free(occ, g))
+        # Allow planning when starting inside an exclusion/occupied zone; only require goal to be free.
+        if not self._is_free(occ, g):
+            log.info("A*: goal cell blocked; cannot plan. s_free=%s g_free=%s", self._is_free(occ, s), self._is_free(occ, g))
             return None
+        if not self._is_free(occ, s):
+            log.info("A*: starting inside occupied/exclusion cell; attempting to escape via free neighbors.")
 
         # Standard A*: allow duplicates in heap, discard stale entries on pop.
         open_heap: List[Tuple[float, float, Coord]] = []  # (f, g, node)

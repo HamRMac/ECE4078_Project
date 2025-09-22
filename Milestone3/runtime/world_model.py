@@ -17,6 +17,14 @@ class WorldModel:
             "next_idx": None,          # (ix, iy) or None
             "next_point": None,        # (x, y) or None
         }
+        # Targets info for GUI (shopping list status)
+        self._targets_info: Dict[str, Any] = {
+            "order": [],               # shopping list order
+            "remaining": {},           # fruit -> (x,y)
+            "collected": [],           # list of fruit names
+            "seen_not_collected": [],  # list of fruit names
+            "unseen": [],              # list of fruit names
+        }
 
     # Pose
     def set_pose(self, pose_xyz: List[float]) -> None:
@@ -78,3 +86,21 @@ class WorldModel:
             s = dict(self._sectors)
             s["searched"] = list(self._sectors.get("searched", []))
             return s
+
+    # Targets info
+    def set_targets_info(self, order: List[str], remaining: Dict[str, Tuple[float, float]],
+                         collected: List[str], seen_not_collected: List[str], unseen: List[str]) -> None:
+        with self._lock:
+            self._targets_info = {
+                "order": list(order or []),
+                "remaining": {str(k): (float(v[0]), float(v[1])) for k, v in (remaining or {}).items()},
+                "collected": list(collected or []),
+                "seen_not_collected": list(seen_not_collected or []),
+                "unseen": list(unseen or []),
+            }
+
+    def get_targets_info(self) -> Dict[str, Any]:
+        with self._lock:
+            info = dict(self._targets_info)
+            info["remaining"] = dict(self._targets_info.get("remaining", {}))
+            return info
