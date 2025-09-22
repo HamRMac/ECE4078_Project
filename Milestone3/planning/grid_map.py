@@ -164,6 +164,10 @@ class GridMap:
     def clear_dynamic(self):
         assert self.dynamic_layer is not None, "Grid not built yet."
         self.dynamic_layer.fill(0)
+        # Invalidate clearance caches affected by dynamic changes
+        self._clearance_cache = None
+        if hasattr(self, '_clearance_cache_static_dynamic'):
+            self._clearance_cache_static_dynamic = None  # type: ignore[attr-defined]
 
     def set_dynamic_fruits(self, positions: List[Tuple[float, float]], fruit_radius_m: float = 0.05):
         """Replace dynamic obstacles with buffered fruit obstacles.
@@ -179,8 +183,10 @@ class GridMap:
         for (x, y) in positions or []:
             r, c = self.world_to_grid(float(x), float(y))
             cv2.circle(self.dynamic_layer, (c, r), rc, color=255, thickness=-1)
-        # Invalidate clearance cache
+        # Invalidate clearance caches
         self._clearance_cache = None
+        if hasattr(self, '_clearance_cache_static_dynamic'):
+            self._clearance_cache_static_dynamic = None  # type: ignore[attr-defined]
 
     def combined(self) -> np.ndarray:
         assert self.static_layer is not None and self.dynamic_layer is not None, "Grid not built yet."
@@ -227,6 +233,19 @@ class GridMap:
         dist_cells = cv2.distanceTransform(free_mask, cv2.DIST_L2, 3)
         clearance_m = dist_cells * float(self.res)
         self._clearance_cache_static = clearance_m  # type: ignore[attr-defined]
+        return clearance_m
+
+    def clearance_map_static_dynamic(self) -> np.ndarray:
+        """Clearance against static + dynamic obstacles only (excludes safety/unknown)."""
+        if self.static_layer is None or self.dynamic_layer is None:
+            raise AssertionError("Grid not built yet.")
+        if hasattr(self, '_clearance_cache_static_dynamic') and self._clearance_cache_static_dynamic is not None:
+            return self._clearance_cache_static_dynamic  # type: ignore[attr-defined]
+        occ_sd = np.maximum(self.static_layer, self.dynamic_layer)
+        free_mask = (occ_sd == 0).astype(np.uint8)
+        dist_cells = cv2.distanceTransform(free_mask, cv2.DIST_L2, 3)
+        clearance_m = dist_cells * float(self.res)
+        self._clearance_cache_static_dynamic = clearance_m  # type: ignore[attr-defined]
         return clearance_m
 
     # ---------------- Visualisation ----------------

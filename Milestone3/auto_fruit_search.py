@@ -692,7 +692,7 @@ def main():
                                                 clearance_power=3.0,
                                                 clearance_epsilon=0.02*0.5,
                                                 min_prune_clearance=0.06,
-                                                clearance_from_static=True),
+                                                clearance_mode='static_dynamic'),
                           world=world,
                           get_pose_fn=_get_pose,
                           intents_q=intents_q,

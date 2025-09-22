@@ -312,6 +312,8 @@ class RunnerL3(threading.Thread):
                                         unseen=[n for n in order if n not in remaining],
                                         active=None,
                                         positions=positions)
+            # Initial status
+            self.world.set_status(mode='AUTO', sm_state='L3', action='init', progress=f"0/{len(self._route)}")
         except Exception:
             pass
 
@@ -330,12 +332,17 @@ class RunnerL3(threading.Thread):
                                             unseen=info.get('unseen', []),
                                             active=name,
                                             positions=info.get('positions', {}))
+                self.world.set_status(mode='AUTO', sm_state='L3', action='scan', target=name,
+                                       progress=f"{idx+1}/{len(self._route)}")
             except Exception:
                 pass
 
             attempt = 0
             while not self._stop.is_set():
                 # 1) Scan
+                log.info("Starting scan before approaching %s (attempt %d)", name, attempt + 1)
+                self.world.set_status(mode='AUTO', sm_state='L3', action='scan', target=name,
+                                       progress=f"{idx+1}/{len(self._route)}")
                 self._scan_and_update()
                 pose = self.get_pose_fn()
                 self.world.set_pose(pose)
@@ -362,6 +369,8 @@ class RunnerL3(threading.Thread):
                                                     unseen=unseen,
                                                     active=None,
                                                     positions=info.get('positions', {}))
+                        self.world.set_status(mode='AUTO', sm_state='L3', action='reached', target=name,
+                                               progress=f"{idx+1}/{len(self._route)}")
                     except Exception:
                         pass
                     break  # next target
@@ -369,6 +378,8 @@ class RunnerL3(threading.Thread):
                 planned = self._plan_best_approach_to_target(txy)
                 if not planned:
                     log.info("No path found yet towards %s; rescanning", name)
+                    self.world.set_status(mode='AUTO', sm_state='L3', action='replan', target=name,
+                                           progress=f"{idx+1}/{len(self._route)}")
                     time.sleep(0.5)
                     attempt += 1
                     continue
@@ -379,6 +390,12 @@ class RunnerL3(threading.Thread):
                     self.world.set_pose(pose)
                     self._maybe_replan(pose)
                     self._drive_step(pose)
+                    try:
+                        total = max(1, len(self._plan_waypoints) - 1)
+                        self.world.set_status(mode='AUTO', sm_state='L3', action='drive', target=name,
+                                               progress=f"{min(self._wp_idx,total)}/{total}")
+                    except Exception:
+                        pass
                     dist = self._dist((pose[0], pose[1]), txy)
                     if dist <= 0.25:
                         print(f"Reached {name}")
@@ -391,5 +408,6 @@ class RunnerL3(threading.Thread):
                         time.sleep(self._period - dt)
                 # Loop back to scan again if not within threshold
 
+        self.world.set_status(mode='AUTO', sm_state='L3', action='done')
         print("Reached all targets")
         self.cmd.stop()

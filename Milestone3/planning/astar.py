@@ -39,6 +39,7 @@ class AStarPlanner:
                  clearance_epsilon: float = 0.02,
                  clearance_power: float = 1.0,
                  min_prune_clearance: float = 0.0,
+                 clearance_mode: str = "combined",
                  clearance_from_static: bool = False):
         """
         Parameters
@@ -56,7 +57,11 @@ class AStarPlanner:
         self.clear_eps = float(clearance_epsilon)
         self.clear_pow = float(clearance_power)
         self.min_prune_clear = float(min_prune_clearance)
-        self.clear_from_static = bool(clearance_from_static)
+        # Preferred new API: clearance_mode in {"combined","static","static_dynamic"}
+        # Back-compat: if clearance_from_static=True, override to "static"
+        self.clear_mode = str(clearance_mode or "combined").lower()
+        if clearance_from_static:
+            self.clear_mode = "static"
 
     # --------------- Core A* ---------------
     @staticmethod
@@ -103,7 +108,12 @@ class AStarPlanner:
         clearance = None
         if self.clear_w > 0.0:
             try:
-                clearance = grid.clearance_map_static() if self.clear_from_static else grid.clearance_map()
+                if self.clear_mode == "static":
+                    clearance = grid.clearance_map_static()
+                elif self.clear_mode in ("static_dynamic", "sd", "solid"):
+                    clearance = grid.clearance_map_static_dynamic()
+                else:
+                    clearance = grid.clearance_map()
             except Exception:
                 clearance = None  # fail-safe to original costs
 
@@ -222,7 +232,12 @@ class AStarPlanner:
         clr = None
         if self.min_prune_clear > 0.0:
             try:
-                clr = grid.clearance_map()
+                if self.clear_mode == "static":
+                    clr = grid.clearance_map_static()
+                elif self.clear_mode in ("static_dynamic", "sd", "solid"):
+                    clr = grid.clearance_map_static_dynamic()
+                else:
+                    clr = grid.clearance_map()
             except Exception:
                 clr = None
         pruned: List[Coord] = [path_grid[0]]
