@@ -684,6 +684,9 @@ def main():
     def _plan_provider():
         return world.get_plan()
 
+    def _detections_provider():
+        return world.get_detections()
+
     def _status_provider():
         return world.get_status()
 
@@ -713,6 +716,7 @@ def main():
         intent_sink=_intent_sink if args.interactive_gui else None,
         plan_provider=_plan_provider,
         status_provider=_status_provider,
+        detections_provider=_detections_provider,
         mode_sink=_mode_sink,
     )
 

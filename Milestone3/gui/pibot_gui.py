@@ -260,6 +260,70 @@ class PiBotGUI:
         except Exception:
             pass
 
+        # Draw detected fruit sprites at their world locations (consistent size)
+        try:
+            dets = self.detections_provider() if callable(self.detections_provider) else []
+        except Exception:
+            dets = []
+        if dets:
+            if not hasattr(self, '_fruit_icon_cache'):
+                self._fruit_icon_cache = {}
+
+            def _get_icon(label: str, size_px: int = 18):
+                key = f"{label.lower()}:{size_px}"
+                if key in self._fruit_icon_cache:
+                    return self._fruit_icon_cache[key]
+                # Try file pics/fruits/<label>.png first, else fallback to pics/8bit/<label>.png
+                path1 = f"pics/fruits/{label.lower()}.png"
+                path2 = f"pics/8bit/{label.lower()}.png"
+                icon = cv2.imread(path1, cv2.IMREAD_UNCHANGED)
+                if icon is None:
+                    icon = cv2.imread(path2, cv2.IMREAD_UNCHANGED)
+                if icon is not None:
+                    icon = cv2.resize(icon, (size_px, size_px), interpolation=cv2.INTER_AREA)
+                self._fruit_icon_cache[key] = icon
+                return icon
+
+            for item in dets:
+                # accept either {'position':[x,y]} or {'world':{'x':..,'y':..}}
+                label = str(item.get('class') or item.get('label') or 'unknown')
+                pos = None
+                if 'position' in item and isinstance(item['position'], (list, tuple)) and len(item['position']) >= 2:
+                    pos = (float(item['position'][0]), float(item['position'][1]))
+                elif 'world' in item and isinstance(item['world'], dict):
+                    try:
+                        pos = (float(item['world']['x']), float(item['world']['y']))
+                    except Exception:
+                        pos = None
+                if pos is None:
+                    continue
+                rr, cc = self.grid.world_to_grid(pos[0], pos[1])
+                cx, cy = int(cc * self.scale), int(rr * self.scale)
+                icon = _get_icon(label, size_px=18)
+                if icon is None or icon.ndim < 3:
+                    # fallback: draw a small circle and label text
+                    cv2.circle(vis_bgr, (cx, cy), 6, (60, 200, 60), -1)
+                    cv2.putText(vis_bgr, label[:8], (cx + 8, cy - 6), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (10, 10, 10), 2, cv2.LINE_AA)
+                    cv2.putText(vis_bgr, label[:8], (cx + 8, cy - 6), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (240, 240, 240), 1, cv2.LINE_AA)
+                    continue
+                ih, iw = icon.shape[:2]
+                x0 = cx - iw // 2; y0 = cy - ih // 2
+                x1 = x0 + iw; y1 = y0 + ih
+                H, W = vis_bgr.shape[:2]
+                x0c, y0c = max(0, x0), max(0, y0)
+                x1c, y1c = min(W, x1), min(H, y1)
+                if x1c <= x0c or y1c <= y0c:
+                    continue
+                roi = vis_bgr[y0c:y1c, x0c:x1c]
+                ix0, iy0 = x0c - x0, y0c - y0
+                ix1, iy1 = ix0 + (x1c - x0c), iy0 + (y1c - y0c)
+                icon_crop = icon[iy0:iy1, ix0:ix1]
+                if icon_crop.shape[2] == 4:
+                    alpha = icon_crop[:, :, 3:] / 255.0
+                    roi[:] = (1 - alpha) * roi + alpha * icon_crop[:, :, :3]
+                else:
+                    roi[:] = icon_crop
+
         # Convert BGR numpy image to PyGame surface and blit
         vis_rgb = cv2.cvtColor(vis_bgr, cv2.COLOR_BGR2RGB)
         pygame_surf = pygame.surfarray.make_surface(np.rot90(vis_rgb))
