@@ -319,7 +319,7 @@ def estimate_pose(camera_matrix, obj_info, robot_pose, use_fusion=False, cam_hei
     target_dimensions_dict = {
         'orange':[0.07,0.07,0.073],'lemon':[0.078,0.053,0.050],'pear':[0.076,0.074,0.110],
         'tomato':[0.065,0.065,0.060],'capsicum':[0.076,0.074,0.090],'potato':[0.095,0.065,0.070],
-        'pumpkin':[0.080,0.080,0.080],'garlic':[0.065,0.060,0.070],'lime':[0.074,0.052,0.050],
+        'pumpkin':[0.080,0.080,0.080],'garlic':[0.065,0.060,0.070],
     }
     true_sizes = target_dimensions_dict.get(label, target_dimensions_dict['tomato'])
     true_height = float(true_sizes[0])
@@ -327,6 +327,8 @@ def estimate_pose(camera_matrix, obj_info, robot_pose, use_fusion=False, cam_hei
     # Depth from bbox height
     bbox_h_pix = max(1.0, float(h))
     Z_bbox = (fx * true_height) / bbox_h_pix
+
+
 
     Z_fused = Z_bbox
     Z_ground = None

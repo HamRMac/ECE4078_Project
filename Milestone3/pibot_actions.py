@@ -259,6 +259,9 @@ class PiBotActions:
                         if W > 0 and (x < margin_px or (x + w) > (W - margin_px)):
                             frame_entry['detections'].append({'label': label, 'bbox': [x, y, w, h], 'error': 'edge_filtered'})
                             continue
+
+
+
                         world_ok = False
                         error_reason = None
                         wx = wy = None
@@ -281,7 +284,10 @@ class PiBotActions:
                                     wx = rx + r * math.cos(rth + th)
                                     wy = ry + r * math.sin(rth + th)
                                     log.debug("scan: class='%s' bbox=[%.1f,%.1f,%.1f,%.1f] => r=%.3f m, θ=%.3f rad => @ (%.3f, %.3f)", label, x, y, w, h, r, th, wx, wy)
-                                    world_ok = True
+
+                                    if (r <= 0.8):
+                                        world_ok = True
+
                             except Exception as e:
                                 error_reason = f'world_compute_failed:{e}'
                         else:
