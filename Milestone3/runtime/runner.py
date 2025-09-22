@@ -355,37 +355,72 @@ class Runner(threading.Thread):
         # EXECUTES IN STATE "CalculateNextSafePoint"
         elif sm_state == 'calculate_next_safe_point':
             self.world.set_status(mode='AUTO', sm_state='calculate_next_safe_point', action='choose_safe_point')
-            log.info("SM: CalculateNextSafePoint → selecting sector-based safe point")
-            goal = None
-            try:
-                pick = self._sector_explorer.pick_next_target(self.grid, excluded=self._searched_sectors)
-                if pick is not None:
-                    goal, sector_idx, info = pick
-                    # Defer exclusion until scan completes at that location
-                    self._next_sector_idx = tuple(sector_idx)
-                    self._next_scan_point = (float(goal[0]), float(goal[1]))
-                    # Publish overlay info to world model
-                    self.world.set_sectors(rows=self._sector_explorer.rows,
-                                           cols=self._sector_explorer.cols,
-                                           searched=list(self._searched_sectors),
-                                           next_idx=self._next_sector_idx,
-                                           next_point=self._next_scan_point)
-                    log.info("Selected sector %s (dark=%.2f free=%d/%d) → goal @ (%.2f, %.2f)",
-                             str(sector_idx), float(info.dark_fraction), int(info.free_cells), int(info.total_cells), goal[0], goal[1])
-                else:
-                    log.info("No viable sector target found; falling back to map center")
-            except Exception as e:
-                log.warning("Sector selection failed: %s", e)
+            log.info("SM: CalculateNextSafePoint → selecting sector-based safe point (safest-first, plan-validated)")
+            pose_now = self.get_pose_fn()
+            tried: set[tuple[int, int]] = set()
+            chosen_goal: Optional[Tuple[float, float]] = None
+            chosen_idx: Optional[Tuple[int, int]] = None
+            chosen_info = None
+            # Iterate through sectors by priority until we find one we can plan to
+            for _ in range(self._sector_explorer.rows * self._sector_explorer.cols):
+                try:
+                    pick = self._sector_explorer.pick_next_target(self.grid, excluded=(self._searched_sectors | tried))
+                except Exception as e:
+                    log.warning("Sector selection failed: %s", e)
+                    pick = None
+                if pick is None:
+                    break
+                goal, sector_idx, info = pick
+                # Try to plan to this goal
+                pr = None
+                try:
+                    pr = self.planner.plan(self.grid, (pose_now[0], pose_now[1]), (goal[0], goal[1]))
+                except Exception:
+                    pr = None
+                if pr is None:
+                    log.info("Sector %s goal (%.2f, %.2f) unreachable now; trying next.", str(sector_idx), goal[0], goal[1])
+                    tried.add(tuple(sector_idx))
+                    continue
+                # Accept this sector and plan
+                chosen_goal = (float(goal[0]), float(goal[1]))
+                chosen_idx = tuple(sector_idx)
+                chosen_info = info
+                # Apply plan to world/runner
+                self._goal = chosen_goal
+                self._plan_waypoints = list(pr.pruned_world if pr.pruned_world else pr.path_world)
+                self._wp_idx = 0
+                self.world.set_plan(self._plan_waypoints, active_idx=self._wp_idx)
+                self.world.set_status(action='drive', progress=f"0/{len(self._plan_waypoints)}")
+                self._last_plan_time = time.time()
+                try:
+                    key = (round(self._goal[0], 3), round(self._goal[1], 3))
+                    self._last_plan_by_goal[key] = list(self._plan_waypoints)
+                except Exception:
+                    pass
+                break
 
-            if goal is None:
+            if chosen_goal is None:
+                # Fallback to map center
                 try:
                     bx0, by0, bx1, by1 = self.grid.bounds_wm  # type: ignore
-                    goal = ((bx0 + bx1) * 0.5, (by0 + by1) * 0.5)
+                    chosen_goal = ((bx0 + bx1) * 0.5, (by0 + by1) * 0.5)
                 except Exception:
-                    goal = (0.0, 0.0)
+                    chosen_goal = (0.0, 0.0)
+                self._goal = (float(chosen_goal[0]), float(chosen_goal[1]))
+                self._plan_from_current()
+            else:
+                # Defer exclusion until scan completes, and publish overlay
+                self._next_sector_idx = chosen_idx
+                self._next_scan_point = chosen_goal
+                self.world.set_sectors(rows=self._sector_explorer.rows,
+                                       cols=self._sector_explorer.cols,
+                                       searched=list(self._searched_sectors),
+                                       next_idx=self._next_sector_idx,
+                                       next_point=self._next_scan_point)
+                if chosen_info is not None:
+                    log.info("Selected sector %s (dark=%.2f free=%d/%d) → goal @ (%.2f, %.2f)",
+                             str(chosen_idx), float(chosen_info.dark_fraction), int(chosen_info.free_cells), int(chosen_info.total_cells), chosen_goal[0], chosen_goal[1])
 
-            self._goal = (float(goal[0]), float(goal[1]))
-            self._plan_from_current()
             try:
                 self.sm.T_calculate_next_safe_point_to_navigate_to_safe_point()
             except Exception:
