@@ -85,7 +85,7 @@ class PiBotActions:
                     pose_now = [0.0, 0.0, 0.0]
             th_now = float(pose_now[2] if pose_now is not None else 0.0)
             err = wrap_pi(float(goal_heading_rad) - th_now)
-            log.info(f"scan: angle: {th_now} with goal {goal_heading_rad} --> err = {err}")
+            log.debug(f"scan: angle: {th_now} with goal {goal_heading_rad} --> err = {err}")
             if abs(err) <= ang_tol:
                 break
             turn_dir = 1 if err > 0 else -1
@@ -138,7 +138,7 @@ class PiBotActions:
             step = 10.0
 
         if step < 10.0:
-            log.info("scan: requested step %.1f° < 10°. Using 10°.", step)
+            log.warning("scan: requested step %.1f° < 10°. Using 10°.", step)
             step = 10.0
 
         # ---------------------------------------------
@@ -146,7 +146,7 @@ class PiBotActions:
         # ---------------------------------------------
         n_steps = max(1, int(math.ceil(360.0 / step)))
         step = 360.0 / n_steps
-        log.info("scan: %d steps of %.1f° (turning_tick=%d, pause=%.1fs)", n_steps, step, turning_tick, pause_s)
+        log.debug("scan: %d steps of %.1f° (turning_tick=%d, pause=%.1fs)", n_steps, step, turning_tick, pause_s)
 
         # ---------------------------------------------
         # 3) Rotate incrementally to each target heading using closed-loop heading
@@ -179,7 +179,7 @@ class PiBotActions:
                     start_pose = [0.0, 0.0, 0.0]
             curr_th = float(start_pose[2] if start_pose is not None else 0.0)
             goal_th = wrap_pi(curr_th + math.radians(step))
-            log.info(f"scan: heading goal {goal_th}")
+            log.debug(f"scan: heading goal {goal_th}")
 
             # Closed-loop turn using helper
             last_tick = self.turn_to_heading(goal_th, get_pose_fn, turning_tick)
