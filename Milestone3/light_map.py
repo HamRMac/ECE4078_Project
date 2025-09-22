@@ -169,7 +169,7 @@ for ix in range(num_sectors_x):
         offset_y = 0.15  # meters to move up (positive) or down (negative)
         ax.text(cx + offset_x, cy + offset_y, f"{fraction:.2f}", ha='center', va='center', fontsize=10, fontweight='bold', color='black')
 
-        ax.text(cx,cy,f"{fraction:.2f}", ha='center', va='center', fontsize=10, fontweight='bold', color='black')
+
 
 # Robot FOV
 fov_patch = Wedge(light_pos, xmax,
