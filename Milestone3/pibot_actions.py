@@ -352,7 +352,7 @@ class PiBotActions:
                         turning_tick: int = 25,
                         forward_tick: int = 50) -> None:
         """Rotate to target direction and move forward by distance_m at given forward_tick speed. 
-            Angle_deg should be from the robot's current heading.(i.e. relative angle)
+            Angle_deg should be from the global frame 
 
         - distance_m: distance to move in meters (positive).
         - forward_tick: tick value for forward motion (affects speed).
@@ -366,30 +366,28 @@ class PiBotActions:
             log.info("approach_fruit: requested distance %.3f m < 0.01 m. No movement.", dist)
             return
 
+        # interpret `angle_deg` as a global/absolute heading in degrees (world frame)
         try:
-            angle = float(angle_deg)
+            goal_angle_deg = float(angle_deg)
         except Exception:
-            angle = 0.0
+            goal_angle_deg = 0.0
 
-        if angle != 0.0:
-            # Use closed-loop heading control to turn to the desired heading
+        if not (-360.0 < goal_angle_deg < 360.0):
+            # clamp to sensible range
+            goal_angle_deg = ((goal_angle_deg + 180.0) % 360.0) - 180.0
+
+        # convert to radians and normalise to [-pi, pi]
+        goal_th = (math.radians(goal_angle_deg) + math.pi) % (2.0 * math.pi) - math.pi
+        try:
             pose_fn = self.get_pose_fn if callable(self.get_pose_fn) else (lambda: [0.0, 0.0, 0.0])
-            # compute absolute goal heading
+            last_tick = self.turn_to_heading(goal_th, pose_fn, turning_tick)
+            # ensure motors stopped from turning
             try:
-                curr = pose_fn()
-                curr_th = float(curr[2])
+                self.ppi.set_velocity([0, 0], turning_tick=last_tick, time=0)
             except Exception:
-                curr_th = 0.0
-            goal_th = (curr_th + math.radians(angle) + math.pi) % (2.0 * math.pi) - math.pi
-            try:
-                last_tick = self.turn_to_heading(goal_th, pose_fn, turning_tick)
-                # ensure motors stopped from turning
-                try:
-                    self.ppi.set_velocity([0, 0], turning_tick=last_tick, time=0)
-                except Exception:
-                    pass
-            except Exception as e:
-                log.warning("approach_fruit: closed-loop turn failed: %s", e)
+                pass
+        except Exception as e:
+            log.warning("approach_fruit: closed-loop turn failed: %s", e)
 
         try:
             tick = int(forward_tick)
@@ -570,9 +568,15 @@ class PiBotActions:
         if not tgt:
             return None
         angle_deg, distance_m = self._rel_angle_dist(tgt["position"], standoff_m=standoff_m)
+        # compute global heading: robot heading + relative angle
+        try:
+            rx, ry, rth = [float(v) for v in self.get_pose_fn()]
+            global_heading_deg = (math.degrees(rth) + float(angle_deg) + 180.0) % 360.0 - 180.0
+        except Exception:
+            global_heading_deg = float(angle_deg)
         self.last_forward = distance_m
         # Use closed-loop turning inside approach_fruit
-        self.approach_fruit(angle_deg=angle_deg, distance_m=distance_m,
+        self.approach_fruit(angle_deg=global_heading_deg, distance_m=distance_m,
                             turning_tick=turning_tick, forward_tick=forward_tick)
         return {"angle_deg": angle_deg, "distance_m": distance_m}
 
