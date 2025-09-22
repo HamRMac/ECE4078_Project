@@ -1,5 +1,5 @@
 import math
-from typing import Tuple, Optional
+from typing import Tuple, Optional, List
 
 import cv2
 import numpy as np
@@ -48,6 +48,8 @@ class GridMap:
         # Layers: 0 free, 255 occupied
         self.static_layer: Optional[np.ndarray] = None
         self.dynamic_layer: Optional[np.ndarray] = None
+        # Safety layer (255 = unknown/unsafe, 0 = observed safe); increases occupancy in combined()
+        self.safety_layer: Optional[np.ndarray] = None
 
         # Cached clearance map (metres) computed from combined occupancy
         self._clearance_cache: Optional[np.ndarray] = None
@@ -126,6 +128,8 @@ class GridMap:
 
         self.static_layer = np.zeros((H, W), dtype=np.uint8)
         self.dynamic_layer = np.zeros((H, W), dtype=np.uint8)
+        # Start assuming unknown/unsafe everywhere (255); scans will clear to 0 where safe
+        self.safety_layer = np.full((H, W), 255, dtype=np.uint8)
 
         # Invalidate clearance cache
         self._clearance_cache = None
@@ -156,12 +160,35 @@ class GridMap:
         r, c = self.world_to_grid(x, y)
         rc = max(1, int(math.ceil(radius / self.res)))
         cv2.circle(self.dynamic_layer, (c, r), rc, color=255, thickness=-1)
+
+    def clear_dynamic(self):
+        assert self.dynamic_layer is not None, "Grid not built yet."
+        self.dynamic_layer.fill(0)
+
+    def set_dynamic_fruits(self, positions: List[Tuple[float, float]], fruit_radius_m: float = 0.05):
+        """Replace dynamic obstacles with buffered fruit obstacles.
+
+        Buffer = fruit_radius_m + robot_radius + inflation_margin (conservative),
+        matching the ArUco inflation style used in the static layer.
+        """
+        assert self.dynamic_layer is not None, "Grid not built yet."
+        # Clear previous dynamic obstacles (we use current fruit set)
+        self.clear_dynamic()
+        inflate_r = float(fruit_radius_m) + self.robot_radius + self.inflation_margin
+        rc = max(1, int(math.ceil(inflate_r / self.res)))
+        for (x, y) in positions or []:
+            r, c = self.world_to_grid(float(x), float(y))
+            cv2.circle(self.dynamic_layer, (c, r), rc, color=255, thickness=-1)
         # Invalidate clearance cache
         self._clearance_cache = None
 
     def combined(self) -> np.ndarray:
         assert self.static_layer is not None and self.dynamic_layer is not None, "Grid not built yet."
-        return np.maximum(self.static_layer, self.dynamic_layer)
+        occ = np.maximum(self.static_layer, self.dynamic_layer)
+        # Mark unknown/unsafe as occupied (255), safe as 0; merge by OR
+        if self.safety_layer is not None:
+            occ = np.maximum(occ, self.safety_layer)
+        return occ
 
     # ---------------- Clearance ----------------
     def clearance_map(self) -> np.ndarray:
@@ -231,3 +258,18 @@ class GridMap:
             pass
         """
         return vis
+
+    # ---------------- Free-space updates ----------------
+    def clear_safety(self):
+        assert self.safety_layer is not None, "Grid not built yet."
+        self.safety_layer.fill(255)
+
+    def apply_safety_mask(self, safe_mask: np.ndarray):
+        """Integrate a boolean/uint8 mask (grid-aligned) where True means observed safe.
+
+        Sets safety_layer to 0 at safe cells, keeping previously safe cells at 0 (monotonic expansion of free space).
+        """
+        assert self.safety_layer is not None, "Grid not built yet."
+        if safe_mask.dtype != np.bool_:
+            safe_mask = safe_mask.astype(bool)
+        self.safety_layer[safe_mask] = 0

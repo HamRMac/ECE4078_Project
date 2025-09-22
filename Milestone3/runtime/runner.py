@@ -6,6 +6,8 @@ from typing import Optional, Tuple, List
 from navigation.controller import ControllerManager
 from planning.astar import AStarPlanner
 from planning.grid_map import GridMap
+from planning.visibility_helper import compute_safety_mask
+import numpy as np
 from .world_model import WorldModel
 from .robot_commander import RobotCommander
 from state_machine.state_machine import PiBotFruitSearchSM
@@ -32,7 +34,8 @@ class Runner(threading.Thread):
                  actions: PiBotActions=None,
                  detector=None,
                  fruit_ranger=None,
-                 target_dims=None):
+                 target_dims=None,
+                 aruco_positions: np.ndarray = None):
         super().__init__(daemon=True, name="Runner")
         log.info("Runner initialized")
         self.cmd = commander
@@ -51,6 +54,7 @@ class Runner(threading.Thread):
         self.detector = detector
         self.fruit_ranger = fruit_ranger
         self.target_dims = target_dims
+        self.aruco_positions = aruco_positions
         self._goal: Optional[Tuple[float, float]] = None
         self._plan_waypoints: List[Tuple[float, float]] = []
         self._wp_idx: int = 0
@@ -221,9 +225,29 @@ class Runner(threading.Thread):
                         dets = getattr(self.actions, 'current_obj_positions', []) or []
                         self.world.set_detections(dets)
                         log.info("Scan complete: %d clustered objects", len(dets))
-                        log.info("Detected object positions: %s", dets)
-                    except Exception:
-                        pass
+                        # Update observed-free mask in grid using visibility helper
+                        fruit_positions = []
+                        for d in dets:
+                            pos = d.get('position')
+                            if isinstance(pos, (list, tuple)) and len(pos) >= 2:
+                                fruit_positions.append((float(pos[0]), float(pos[1])))
+                        if self.aruco_positions is not None and self.grid.size is not None:
+                            safe = compute_safety_mask(self.grid,
+                                                       robot_pose=self.get_pose_fn(),
+                                                       aruco_positions=self.aruco_positions,
+                                                       fruit_positions=fruit_positions,
+                                                       marker_length=0.07,
+                                                       fruit_radius=0.05,
+                                                       fov_deg=360.0,
+                                                       max_distance=1.2,
+                                                       step_cells=2)
+                            self.grid.apply_safety_mask(safe)
+                            # Update dynamic obstacles from current fruit positions with buffered radius
+                            if fruit_positions:
+                                self.grid.set_dynamic_fruits(fruit_positions, fruit_radius_m=0.05)
+                            log.info("Applied safety mask (observed safe cells: %d) and dynamic fruit obstacles (%d)", int(np.count_nonzero(safe)), len(fruit_positions))
+                    except Exception as e:
+                        log.warning("Visibility update failed: %s", e)
                 except Exception:
                     pass
             else:
