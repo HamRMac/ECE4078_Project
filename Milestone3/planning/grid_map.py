@@ -48,8 +48,8 @@ class GridMap:
         # Layers: 0 free, 255 occupied
         self.static_layer: Optional[np.ndarray] = None
         self.dynamic_layer: Optional[np.ndarray] = None
-        # Observed-free layer (255 = free by visibility); clears occupancy in combined()
-        self.free_layer: Optional[np.ndarray] = None
+        # Safety layer (255 = unknown/unsafe, 0 = observed safe); increases occupancy in combined()
+        self.safety_layer: Optional[np.ndarray] = None
 
         # Cached clearance map (metres) computed from combined occupancy
         self._clearance_cache: Optional[np.ndarray] = None
@@ -128,7 +128,8 @@ class GridMap:
 
         self.static_layer = np.zeros((H, W), dtype=np.uint8)
         self.dynamic_layer = np.zeros((H, W), dtype=np.uint8)
-        self.free_layer = np.zeros((H, W), dtype=np.uint8)
+        # Start assuming unknown/unsafe everywhere (255); scans will clear to 0 where safe
+        self.safety_layer = np.full((H, W), 255, dtype=np.uint8)
 
         # Invalidate clearance cache
         self._clearance_cache = None
@@ -165,11 +166,9 @@ class GridMap:
     def combined(self) -> np.ndarray:
         assert self.static_layer is not None and self.dynamic_layer is not None, "Grid not built yet."
         occ = np.maximum(self.static_layer, self.dynamic_layer)
-        # Clear occupancy by observed-free evidence (where free_layer==255)
-        if self.free_layer is not None:
-            mask = (self.free_layer == 255)
-            occ = occ.copy()
-            occ[mask] = 0
+        # Mark unknown/unsafe as occupied (255), safe as 0; merge by OR
+        if self.safety_layer is not None:
+            occ = np.maximum(occ, self.safety_layer)
         return occ
 
     # ---------------- Clearance ----------------
@@ -242,16 +241,16 @@ class GridMap:
         return vis
 
     # ---------------- Free-space updates ----------------
-    def clear_free(self):
-        assert self.free_layer is not None, "Grid not built yet."
-        self.free_layer.fill(0)
+    def clear_safety(self):
+        assert self.safety_layer is not None, "Grid not built yet."
+        self.safety_layer.fill(255)
 
-    def apply_free_mask(self, free_mask: np.ndarray):
-        """OR a boolean/uint8 mask (grid-aligned) into observed-free layer.
+    def apply_safety_mask(self, safe_mask: np.ndarray):
+        """Integrate a boolean/uint8 mask (grid-aligned) where True means observed safe.
 
-        free_mask True/255 means observed free.
+        Sets safety_layer to 0 at safe cells, keeping previously safe cells at 0 (monotonic expansion of free space).
         """
-        assert self.free_layer is not None, "Grid not built yet."
-        if free_mask.dtype != np.uint8:
-            free_mask = free_mask.astype(np.uint8) * 255
-        self.free_layer = np.maximum(self.free_layer, free_mask)
+        assert self.safety_layer is not None, "Grid not built yet."
+        if safe_mask.dtype != np.bool_:
+            safe_mask = safe_mask.astype(bool)
+        self.safety_layer[safe_mask] = 0

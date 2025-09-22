@@ -241,8 +241,8 @@ class Runner(threading.Thread):
                                                        fov_deg=360.0,
                                                        max_distance=1.2,
                                                        step_cells=2)
-                            self.grid.apply_free_mask(safe)
-                            log.info("Applied safety mask to free layer (%d cells)", int(np.count_nonzero(safe)))
+                            self.grid.apply_safety_mask(safe)
+                            log.info("Applied safety mask (observed safe cells: %d)", int(np.count_nonzero(safe)))
                     except Exception as e:
                         log.warning("Visibility update failed: %s", e)
                 except Exception:
