@@ -15,7 +15,7 @@ class BaseController:
                  ang_tol: float = 0.2,
                  max_forward_tick: int = 80,
                  min_forward_tick: int = 20,
-                 max_turn_tick: int = 30,
+                 max_turn_tick: int = 25,
                  min_turn_tick: int = 10):
         self.pos_tol = pos_tol
         self.ang_tol = ang_tol

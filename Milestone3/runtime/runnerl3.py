@@ -218,7 +218,7 @@ class RunnerL3(threading.Thread):
         Returns True if a plan is installed.
         """
         # Try expanding radii close to the target
-        for r in [0.20, 0.25, 0.30, 0.35, 0.40, 0.50]:
+        for r in [0.15, 0.20, 0.25, 0.30, 0.35, 0.40, 0.50]:
             if self._plan_approach_to_target(target_xy, radius_m=r):
                 return True
         # Try nearest free around target
@@ -232,6 +232,97 @@ class RunnerL3(threading.Thread):
             if self._plan_approach_to_target(target_xy, radius_m=r):
                 return True
         return False
+
+    # ----- Beeline helpers (static + dynamic LOS, ignore dark) -----
+    @staticmethod
+    def _supercover_line(p0: Tuple[int, int], p1: Tuple[int, int]):
+        r0, c0 = p0; r1, c1 = p1
+        dr = r1 - r0; dc = c1 - c0
+        sr = 1 if dr > 0 else -1 if dr < 0 else 0
+        sc = 1 if dc > 0 else -1 if dc < 0 else 0
+        dr = abs(dr); dc = abs(dc)
+        r, c = r0, c0
+        cells = [(r, c)]
+        if dr == 0 and dc == 0:
+            return cells
+        if dc >= dr:
+            err = dc // 2
+            for _ in range(dc):
+                c += sc
+                err += dr
+                if err >= dc:
+                    err -= dc
+                    r += sr
+                    cells.append((r, c - sc))
+                cells.append((r, c))
+        else:
+            err = dr // 2
+            for _ in range(dr):
+                r += sr
+                err += dc
+                if err >= dr:
+                    err -= dr
+                    c += sc
+                    cells.append((r - sr, c))
+                cells.append((r, c))
+        return cells
+
+    def _segment_free_static_dynamic(self, a_xy: Tuple[float, float], b_xy: Tuple[float, float]) -> bool:
+        try:
+            occ_sd = np.maximum(self.grid.static_layer, self.grid.dynamic_layer)
+            H, W = occ_sd.shape
+            a_rc = self.grid.world_to_grid(float(a_xy[0]), float(a_xy[1]))
+            b_rc = self.grid.world_to_grid(float(b_xy[0]), float(b_xy[1]))
+            for r, c in self._supercover_line(a_rc, b_rc):
+                if r < 0 or r >= H or c < 0 or c >= W:
+                    return False
+                if int(occ_sd[r, c]) != 0:
+                    return False
+            return True
+        except Exception:
+            return False
+
+    def _attempt_beeline(self, target_name: str, target_xy: Tuple[float, float], stop_radius_m: float = 0.25) -> bool:
+        """Try a direct LOS crawl toward the target, ignoring dark cells.
+
+        Returns True if we executed a beeline and ended within stop_radius_m; False otherwise.
+        """
+        pose = self.get_pose_fn()
+        rx, ry = float(pose[0]), float(pose[1])
+        tx, ty = float(target_xy[0]), float(target_xy[1])
+        dx, dy = (tx - rx), (ty - ry)
+        dist = math.hypot(dx, dy)
+        if dist <= stop_radius_m:
+            return True
+        # Goal point: stop short by stop_radius_m
+        step = max(0.0, dist - stop_radius_m)
+        if step <= 1e-3:
+            gx, gy = tx, ty
+        else:
+            ux, uy = dx / dist, dy / dist
+            gx, gy = rx + ux * step, ry + uy * step
+        # Require LOS against static+dynamic
+        if not self._segment_free_static_dynamic((rx, ry), (gx, gy)):
+            return False
+        # Install single-waypoint plan and crawl
+        self._goal = (gx, gy)
+        self._plan_waypoints = [(gx, gy)]
+        self._wp_idx = 0
+        self.world.set_plan(self._plan_waypoints, active_idx=self._wp_idx)
+        self.world.set_status(mode='AUTO', sm_state='L3', action='beeline', target=target_name)
+        t0 = time.time()
+        timeout = 8.0  # safety cap for straight drive
+        while not self._stop.is_set() and self._plan_waypoints:
+            pose = self.get_pose_fn()
+            self.world.set_pose(pose)
+            self._drive_step(pose)  # do not call _maybe_replan during beeline
+            # proximity check
+            if self._dist((pose[0], pose[1]), (tx, ty)) <= stop_radius_m:
+                return True
+            if (time.time() - t0) > timeout:
+                break
+            time.sleep(self._period)
+        return self._dist(self.get_pose_fn()[:2], (tx, ty)) <= stop_radius_m
 
     def _scan_and_update(self):
         # Execute scan (drive-based) if available
@@ -247,33 +338,43 @@ class RunnerL3(threading.Thread):
             except Exception as e:
                 log.warning("Scan failed: %s", e)
 
-        # Read clusters and drop those near known targets
-        dets = []
+        # Read clusters
+        all_dets = []
         try:
-            dets = getattr(self.actions, 'current_obj_positions', []) or []
+            all_dets = getattr(self.actions, 'current_obj_positions', []) or []
         except Exception:
-            dets = []
-        filtered = []
-        for d in dets:
+            all_dets = []
+
+        # Level 3 policy:
+        # - GUI detections exclude any item whose class/label is in the shopping list
+        #   and exclude near-known-target duplicates.
+        # - Keep-clear uses ALL detections irrespective of class.
+        shopping = set(str(s) for s in (self.shopping_list or []))
+        gui_dets = []
+        keepclear_positions = []
+        for d in all_dets:
             try:
                 pos = d.get('position')
                 if not isinstance(pos, (list, tuple)) or len(pos) < 2:
                     continue
                 wx, wy = float(pos[0]), float(pos[1])
+                # Keep-clear set
+                keepclear_positions.append((wx, wy))
+                # Label check for GUI filtering
+                lab = d.get('class') if ('class' in d) else d.get('label')
+                lab = str(lab) if lab is not None else ''
+                if lab in shopping:
+                    continue
                 if any(self._dist((wx, wy), txy) <= 0.15 for txy in self.known_targets.values()):
-                    continue  # drop duplicates near known targets
-                filtered.append(d)
+                    continue
+                gui_dets.append(d)
             except Exception:
                 continue
-        self.world.set_detections(filtered)
+        self.world.set_detections(gui_dets)
 
-        # Update visibility-based safety and dynamic fruit obstacles
+        # Update visibility-based safety and dynamic fruit obstacles (use keep-clear set)
         try:
-            fruit_positions = []
-            for d in filtered:
-                pos = d.get('position')
-                if isinstance(pos, (list, tuple)) and len(pos) >= 2:
-                    fruit_positions.append((float(pos[0]), float(pos[1])))
+            fruit_positions = list(keepclear_positions)
             if self.aruco_positions is not None and self.grid.size is not None:
                 safe = compute_safety_mask(self.grid,
                                            robot_pose=self.get_pose_fn(),
@@ -374,7 +475,35 @@ class RunnerL3(threading.Thread):
                     except Exception:
                         pass
                     break  # next target
-                # 2) Plan: get as close as possible
+                # 2) Beeline if LOS free (static+dynamic only)
+                if self._attempt_beeline(name, txy, stop_radius_m=0.25):
+                    print(f"Reached {name}")
+                    time.sleep(2.0)
+                    try:
+                        info = self.world.get_targets_info()
+                        remaining = dict(info.get('remaining', {}))
+                        if name in remaining:
+                            del remaining[name]
+                        collected = list(info.get('collected', []))
+                        if name not in collected:
+                            collected.append(name)
+                        order = list(info.get('order', []))
+                        seen = [n for n in remaining.keys()]
+                        unseen = [n for n in order if (n not in remaining) and (n not in collected)]
+                        self.world.set_targets_info(order=order,
+                                                    remaining=remaining,
+                                                    collected=collected,
+                                                    seen_not_collected=seen,
+                                                    unseen=unseen,
+                                                    active=None,
+                                                    positions=info.get('positions', {}))
+                        self.world.set_status(mode='AUTO', sm_state='L3', action='reached', target=name,
+                                               progress=f"{idx+1}/{len(self._route)}")
+                    except Exception:
+                        pass
+                    break
+
+                # 3) Plan: get as close as possible
                 planned = self._plan_best_approach_to_target(txy)
                 if not planned:
                     log.info("No path found yet towards %s; rescanning", name)
@@ -383,7 +512,7 @@ class RunnerL3(threading.Thread):
                     time.sleep(0.5)
                     attempt += 1
                     continue
-                # 3) Drive this plan
+                # 4) Drive this plan
                 while not self._stop.is_set() and self._plan_waypoints:
                     t0 = time.time()
                     pose = self.get_pose_fn()
