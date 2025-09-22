@@ -282,36 +282,63 @@ class RunnerL3(threading.Thread):
         except Exception:
             return False
 
-    def _attempt_beeline_pose(self, target_name: str, target_xy: Tuple[float, float], stop_radius_m: float = 0.25) -> bool:
-        """Try a direct LOS crawl toward the target, ignoring dark cells.
+    def _segment_avoids_dark(self, a_xy: Tuple[float, float], b_xy: Tuple[float, float]) -> bool:
+        """True only if safety_layer is marked safe (0) along segment."""
+        try:
+            safe = self.grid.safety_layer
+            if safe is None:
+                return False
+            H, W = safe.shape
+            a_rc = self.grid.world_to_grid(float(a_xy[0]), float(a_xy[1]))
+            b_rc = self.grid.world_to_grid(float(b_xy[0]), float(b_xy[1]))
+            for r, c in self._supercover_line(a_rc, b_rc):
+                if r < 0 or r >= H or c < 0 or c >= W:
+                    return False
+                if int(safe[r, c]) != 0:
+                    return False
+            return True
+        except Exception:
+            return False
 
-        Returns True if we executed a beeline and ended within stop_radius_m; False otherwise.
+    def _beeline_permitted(self, pose_xy: Tuple[float, float], target_xy: Tuple[float, float], stop_radius_m: float) -> Tuple[bool, Tuple[float, float]]:
+        """Permit beeline only if within 0.5m immediately after a scan and path avoids darkness.
+
+        Returns (ok, goal_xy) where goal is shortened by stop_radius.
         """
-        log.info("Attempting beeline to %s at (%.2f, %.2f)", target_name, target_xy[0], target_xy[1])
-        pose = self.get_pose_fn()
-        rx, ry = float(pose[0]), float(pose[1])
+        rx, ry = float(pose_xy[0]), float(pose_xy[1])
         tx, ty = float(target_xy[0]), float(target_xy[1])
         dx, dy = (tx - rx), (ty - ry)
         dist = math.hypot(dx, dy)
-        if dist <= stop_radius_m:
-            return True
-        # Goal point: stop short by stop_radius_m
+        if dist > 0.50:
+            return (False, (tx, ty))
+        if (time.time() - float(self._last_scan_time)) > 3.0:
+            return (False, (tx, ty))
         step = max(0.0, dist - stop_radius_m)
         if step <= 1e-3:
             gx, gy = tx, ty
         else:
-            ux, uy = dx / dist, dy / dist
+            ux, uy = dx / max(1e-9, dist), dy / max(1e-9, dist)
             gx, gy = rx + ux * step, ry + uy * step
-        # Require LOS against static+dynamic
+        if not self._segment_avoids_dark((rx, ry), (gx, gy)):
+            return (False, (gx, gy))
         if not self._segment_free_static_dynamic((rx, ry), (gx, gy)):
+            return (False, (gx, gy))
+        return (True, (gx, gy))
+
+    def _attempt_beeline_pose(self, target_name: str, target_xy: Tuple[float, float], stop_radius_m: float = 0.25) -> bool:
+        """Direct LOS crawl using pose, gated by recent scan and safe path."""
+        pose = self.get_pose_fn()
+        rx, ry = float(pose[0]), float(pose[1])
+        ok, goal = self._beeline_permitted((rx, ry), target_xy, stop_radius_m)
+        if not ok:
             return False
-        # Install single-waypoint plan and crawl
+        gx, gy = goal
+        # Install line for GUI (red) and crawl
         self._goal = (gx, gy)
-        self._plan_waypoints = [(gx, gy)]
+        self._plan_waypoints = [(rx, ry), (gx, gy)]
         self._wp_idx = 0
-        self.world.set_plan(self._plan_waypoints, active_idx=self._wp_idx)
+        self.world.set_plan(self._plan_waypoints, active_idx=self._wp_idx, color='red')
         self.world.set_status(mode='AUTO', sm_state='L3', action='beeline_pose', target=target_name)
-        log.debug("Beeline to %s at (%.2f, %.2f) from (%.2f, %.2f)", target_name, tx, ty, rx, ry)
         t0 = time.time()
         timeout = 8.0  # safety cap for straight drive
         while not self._stop.is_set() and self._plan_waypoints:
@@ -356,6 +383,14 @@ class RunnerL3(threading.Thread):
         except Exception:
             pass
 
+        # Gate beeline by scan/clearance first
+        try:
+            pose0 = self.get_pose_fn()
+            ok_gate, goal = self._beeline_permitted((float(pose0[0]), float(pose0[1])), target_xy, stop_radius_m)
+        except Exception:
+            ok_gate, goal = (False, target_xy)
+        if not ok_gate:
+            return False
         self.world.set_status(mode='AUTO', sm_state='L3', action='beeline_yolo', target=target_name)
 
         while not self._stop.is_set():
@@ -463,6 +498,8 @@ class RunnerL3(threading.Thread):
                                    pause_s=1.0)
             except Exception as e:
                 log.warning("Scan failed: %s", e)
+        # record scan time for beeline gating
+        self._last_scan_time = time.time()
 
         # Read clusters
         all_dets = []

@@ -6,7 +6,7 @@ class WorldModel:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._pose: List[float] = [0.0, 0.0, 0.0]
-        self._plan: Optional[Dict[str, Any]] = None  # {'waypoints':[(x,y),...], 'active_idx':int}
+        self._plan: Optional[Dict[str, Any]] = None  # {'waypoints':[(x,y),...], 'active_idx':int, 'color':str?}
         self._detections: List[Dict[str, Any]] = []
         self._status: Dict[str, Any] = {"mode": "IDLE", "sm_state": "Init", "action": "", "progress": ""}
         # Sector overlay info for GUI
@@ -38,9 +38,13 @@ class WorldModel:
             return list(self._pose)
 
     # Plan
-    def set_plan(self, waypoints: List[Tuple[float, float]], active_idx: int = 0) -> None:
+    def set_plan(self, waypoints: List[Tuple[float, float]], active_idx: int = 0, color: Optional[str] = None) -> None:
         with self._lock:
-            self._plan = {"waypoints": [(float(x), float(y)) for (x, y) in waypoints], "active_idx": int(active_idx)}
+            self._plan = {
+                "waypoints": [(float(x), float(y)) for (x, y) in waypoints],
+                "active_idx": int(active_idx),
+                "color": None if color is None else str(color)
+            }
 
     def clear_plan(self) -> None:
         with self._lock:
@@ -48,7 +52,11 @@ class WorldModel:
 
     def get_plan(self) -> Optional[Dict[str, Any]]:
         with self._lock:
-            return None if self._plan is None else {"waypoints": list(self._plan["waypoints"]), "active_idx": int(self._plan["active_idx"])}
+            return None if self._plan is None else {
+                "waypoints": list(self._plan["waypoints"]),
+                "active_idx": int(self._plan["active_idx"]),
+                "color": self._plan.get("color")
+            }
 
     # Detections
     def set_detections(self, dets: List[Dict[str, Any]]) -> None:

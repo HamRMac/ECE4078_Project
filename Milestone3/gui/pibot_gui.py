@@ -266,7 +266,10 @@ class PiBotGUI:
                     r_p, c_p = self.grid.world_to_grid(float(wx), float(wy))
                     pts.append([int(c_p * self.scale), int(r_p * self.scale)])
                 if len(pts) >= 2:
-                    cv2.polylines(vis_bgr, [np.array(pts, dtype=np.int32)], isClosed=False, color=(50, 120, 225), thickness=2)
+                    col = (50, 120, 225)
+                    if isinstance(plan.get('color'), str) and plan.get('color').lower() == 'red':
+                        col = (0, 0, 255)
+                    cv2.polylines(vis_bgr, [np.array(pts, dtype=np.int32)], isClosed=False, color=col, thickness=2)
                     drew_provider = True
         if not drew_provider and self.last_plan is not None and self.last_plan.path_grid:
             pts = np.array([[int(c * self.scale), int(r * self.scale)] for (r, c) in self.last_plan.path_grid], dtype=np.int32)
