@@ -1,7 +1,10 @@
 import threading
 import time
 import logging
+import math
 from typing import Optional, Tuple, List
+
+import math
 
 from navigation.controller import ControllerManager
 from planning.astar import AStarPlanner
@@ -36,7 +39,8 @@ class Runner(threading.Thread):
                  detector=None,
                  fruit_ranger=None,
                  target_dims=None,
-                 aruco_positions: np.ndarray = None):
+                 aruco_positions: np.ndarray = None,
+                 shopping_list: Optional[List[str]] = None):
         super().__init__(daemon=True, name="Runner")
         log.info("Runner initialized")
         self.cmd = commander
@@ -56,13 +60,14 @@ class Runner(threading.Thread):
         self.fruit_ranger = fruit_ranger
         self.target_dims = target_dims
         self.aruco_positions = aruco_positions
+        self.shopping_list: List[str] = list(shopping_list or [])
         self._goal: Optional[Tuple[float, float]] = None
         self._plan_waypoints: List[Tuple[float, float]] = []
         self._wp_idx: int = 0
         self._period = 1.0 / max(1.0, float(hz))
         self._last_plan_time: float = 0.0
         self._xtrack_thresh: float = 0.15
-        self._replan_period_s: float = 2.5
+        self._replan_period_s: float = 0
         self._last_plan_by_goal: dict[Tuple[float, float], List[Tuple[float, float]]] = {}
         # Sector exploration state
         self._sector_explorer = SectorExplorer(rows=3, cols=3, min_clearance_m=0.10)
@@ -138,7 +143,7 @@ class Runner(threading.Thread):
         if self._goal is None or not self._plan_waypoints:
             return
         # Periodic replan
-        need_replan = (time.time() - self._last_plan_time) >= self._replan_period_s
+        need_replan = (self._replan_period_s != 0) and ((time.time() - self._last_plan_time) >= self._replan_period_s)
         # Cross-track error based replan
         try:
             xtrack = AStarPlanner.cross_track_error((pose[0], pose[1]), self._plan_waypoints)
@@ -287,6 +292,33 @@ class Runner(threading.Thread):
                             if fruit_positions:
                                 self.grid.set_dynamic_fruits(fruit_positions, fruit_radius_m=0.05)
                             log.info("Applied safety mask (observed safe cells: %d) and dynamic fruit obstacles (%d)", int(np.count_nonzero(safe)), len(fruit_positions))
+                        # After scan, report nearby shopping-list targets from clustered results (<=0.5m)
+                        try:
+                            pose_now = self.get_pose_fn()
+                            rx, ry, rth = float(pose_now[0]), float(pose_now[1]), float(pose_now[2])
+                            shopping = set(self.shopping_list or [])
+                            nearby = []
+                            for item in (dets or []):
+                                try:
+                                    label = item.get('class')
+                                    if shopping and (label not in shopping):
+                                        continue
+                                    pos = item.get('position')
+                                    if not isinstance(pos, (list, tuple)) or len(pos) < 2:
+                                        continue
+                                    wx = float(pos[0]); wy = float(pos[1])
+                                    dx, dy = wx - rx, wy - ry
+                                    dist = float((dx*dx + dy*dy) ** 0.5)
+                                    if dist <= 0.5:
+                                        heading_deg = (math.degrees(math.atan2(dy, dx) - rth) + 180.0) % 360.0 - 180.0
+                                        nearby.append((str(label), dist, heading_deg))
+                                except Exception:
+                                    continue
+                            if nearby:
+                                msg = ", ".join([f"{lab}: d={d:.2f}m, hdg={h:+.0f}°" for (lab, d, h) in nearby])
+                                log.info("Nearby targets: %s", msg)
+                        except Exception:
+                            pass
                     except Exception as e:
                         log.warning("Visibility update failed: %s", e)
                     # Mark current sector as searched AFTER completing the scan

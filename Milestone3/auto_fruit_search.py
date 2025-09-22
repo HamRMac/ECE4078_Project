@@ -680,7 +680,8 @@ def main():
                     detector=yoloDetectorInstance,
                     fruit_ranger=fruitRangerInstance,
                     target_dims=target_dims_Dict,
-                    aruco_positions=aruco_true_pos)
+                    aruco_positions=aruco_true_pos,
+                    shopping_list=search_list)
     runner.start()
 
     # Providers for GUI (display-only)

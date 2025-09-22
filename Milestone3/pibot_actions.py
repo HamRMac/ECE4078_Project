@@ -349,7 +349,7 @@ class PiBotActions:
                     continue
             log.debug("scan: clustering over %d persisted detections (+%d this scan)", len(self.dets_for_cluster), new_cnt)
             # Cluster over the full persistent list
-            self.current_obj_positions = cluster_detections_dbscan(self.dets_for_cluster, eps_m=0.15, min_samples=1, arena_bound=None)
+            self.current_obj_positions = cluster_detections_dbscan(self.dets_for_cluster, eps_m=0.25, min_samples=1, arena_bound=None)
 
             # Rebuild target queue from clustered objects
             self._build_queue_from_current_objs(order="fifo", pose_fn=get_pose_fn)
