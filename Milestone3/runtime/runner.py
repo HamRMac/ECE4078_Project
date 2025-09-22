@@ -242,7 +242,10 @@ class Runner(threading.Thread):
                                                        max_distance=1.2,
                                                        step_cells=2)
                             self.grid.apply_safety_mask(safe)
-                            log.info("Applied safety mask (observed safe cells: %d)", int(np.count_nonzero(safe)))
+                            # Update dynamic obstacles from current fruit positions with buffered radius
+                            if fruit_positions:
+                                self.grid.set_dynamic_fruits(fruit_positions, fruit_radius_m=0.05)
+                            log.info("Applied safety mask (observed safe cells: %d) and dynamic fruit obstacles (%d)", int(np.count_nonzero(safe)), len(fruit_positions))
                     except Exception as e:
                         log.warning("Visibility update failed: %s", e)
                 except Exception:
