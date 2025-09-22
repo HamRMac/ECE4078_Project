@@ -262,7 +262,80 @@ class Runner(threading.Thread):
                 self.sm.T_scan_to_calculate_next_safe_point()
             except Exception:
                 pass
-        
+        # EXECUTES IN STATE "ApproachFruit"
+        elif sm_state == 'approach_fruit':
+            # Use PiBotActions to approach the current queued target if available
+            log.info("SM: ApproachFruit → approach_current action")
+            if self.actions is not None and hasattr(self.actions, 'approach_current'):
+                try:
+                    res = self.actions.approach_current()
+                    if res is None:
+                        log.info("approach_current: no target to approach")
+                    else:
+                        log.info("approach_current: result=%s", res)
+                    try:
+                        self.sm.T_approach_fruit_to_navigate_to_fruit()
+                    except Exception:
+                        pass
+                except Exception as e:
+                    log.warning("Runner: approach_current failed: %s", e)
+            else:
+                # Fallback: plan to a placeholder goal
+                self._goal = (1.0, 0.0)
+                self._plan_from_current()
+                try:
+                    self.sm.T_approach_fruit_to_navigate_to_fruit()
+                except Exception:
+                    pass
+
+        # EXECUTES IN STATE "SitNextToCloseFruit"
+        elif sm_state == 'sit_next_to_close_fruit':
+            # Placeholder: sit next to fruit at (1,0)
+            self.world.set_status(mode='AUTO', sm_state='sit_next_to_close_fruit', action='sit_next_to_fruit')
+            if self.actions is not None:
+                try:
+                    # Use the PiBotActions convenience method which pops the target
+                    ok = self.actions.collect_current(duration_s=2.1)
+                    if ok:
+                        log.info("SM: SitNextToCloseFruit → collected current target")
+                    else:
+                        log.info("SM: SitNextToCloseFruit → no target to collect")
+                except Exception as e:
+                    log.warning("Runner: collect_current failed: %s", e)
+            else:
+                # Fallback: sleep to simulate collection
+                time.sleep(2.1)
+
+        # EXECUTES IN STATE "GoBackToScanPoint"
+        elif sm_state == 'go_back_to_scan_point':
+            # Attempt to return from current using PiBotActions if available
+            log.info("SM: GoBackToScanPoint → return_from_current action")
+            if self.actions is not None and hasattr(self.actions, 'return_from_current'):
+                try:
+                    ok = self.actions.return_from_current()
+                    if ok:
+                        log.info("return_from_current: returned by %.3f m", getattr(self.actions, 'last_forward', 0.0))
+                    else:
+                        log.info("return_from_current: nothing to return from; planning to (0,0)")
+                        self._goal = (0.0, 0.0)
+                        self._plan_from_current()
+                    try:
+                        self.sm.T_go_back_to_scan_point_to_scan()
+                    except Exception:
+                        pass
+                except Exception as e:
+                    log.warning("Runner: return_from_current failed: %s", e)
+            else:
+                # Fallback: plan back to origin
+                self._goal = (0.0, 0.0)
+                self._plan_from_current()
+                try:
+                    self.sm.T_go_back_to_scan_point_to_scan()
+                except Exception:
+                    pass
+
+
+
         # EXECUTES IN STATE "CalculateNextSafePoint"
         elif sm_state == 'calculate_next_safe_point':
             self.world.set_status(mode='AUTO', sm_state='calculate_next_safe_point', action='choose_safe_point')

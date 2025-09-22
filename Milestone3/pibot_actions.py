@@ -580,14 +580,22 @@ class PiBotActions:
                             turning_tick=turning_tick, forward_tick=forward_tick)
         return {"angle_deg": angle_deg, "distance_m": distance_m}
 
-    def collect_current(self, duration_s: float = 2.1) -> bool:
+    def collect_current(self, duration_s: float = 2.1, collection_class: Optional[str] = None) -> bool:
         """
-        Convenience: call collect_fruit() using the current target's class, then pop it from the queue.
+        Convenience: call collect_fruit() using the provided class (if given) or the
+        current target's class, then pop it from the queue.
+
+        Parameters:
+        - duration_s: seconds to run the collector
+        - collection_class: optional explicit class name to pass through to logging/collector
         """
         tgt = self.peek_target()
         if not tgt:
             return False
-        self.collect_fruit(collection_class=tgt.get("class", "default"), duration_s=duration_s)
+
+        class_to_collect = collection_class or tgt.get("class", "default")
+        log.info("collect_current: collecting class='%s' for %.2fs", class_to_collect, float(duration_s))
+        self.collect_fruit(collection_class=class_to_collect, duration_s=duration_s)
         self.pop_target()
         return True
 
