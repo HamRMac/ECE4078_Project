@@ -102,11 +102,10 @@ class PiBotActions:
         step = 360.0 / n_steps
         log.info("scan: %d steps of %.1f° (turning_tick=%d, pause=%.1fs)", n_steps, step, turning_tick, pause_s)
 
-        duration = self._turn_time_for_angle(step, turning_tick)
-        
         # ---------------------------------------------
-        # 3) Rotate in-place incrementally and capture images
-        #    While rotating, keep EKF updated via get_pose_fn to track true pose/heading
+        # 3) Rotate incrementally to each target heading using closed-loop heading
+        #    control (time=0 non-blocking motor command) and slow down as we
+        #    approach the target heading. Use get_pose_fn for feedback.
         # ---------------------------------------------
         # Storage for captured images, poses and detections
         self.scan_images: List[Tuple[float, np.ndarray]] = []   # (angle_deg, image_rgb)
@@ -115,28 +114,60 @@ class PiBotActions:
         self.scan_detections: List[Dict[str, Any]] = []         # flat list of detections across frames
         self.scan_positions_by_class: Dict[int, List[Tuple[float, float]]] = {}  # class_id -> [(x,y),...]
         cum_angle = 0.0
+
+        def wrap_pi(a: float) -> float:
+            return (a + math.pi) % (2.0 * math.pi) - math.pi
+
+        min_tick = 10
+        max_tick = int(max(min_turning_tick := 10, turning_tick))
+        ang_tol = math.radians(2.0)  # ~2 degrees
+        dt_cmd = 0.05
+
         for i in range(n_steps):
-            # Rotate on the spot by +step degrees in small pulses and tick EKF between pulses
-            rotated_t = 0.0
-            pulse = max(0.05, min(0.2, duration / 5.0))  # 50–200 ms pulses
-            while rotated_t < duration:
-                t_chunk = min(pulse, duration - rotated_t)
+            # Determine current and target headings
+            start_pose = None
+            if callable(get_pose_fn):
                 try:
-                    # Command turn for a short chunk
-                    self.ppi.set_velocity([0, 1], turning_tick=turning_tick, time=t_chunk)
-                except Exception as e:
-                    log.warning("scan: set_velocity failed at step %d/%d: %s", i+1, n_steps, e)
-                # Give EKF a chance to update from sensors (if callback provided)
+                    start_pose = get_pose_fn()
+                except Exception:
+                    start_pose = [0.0, 0.0, 0.0]
+            curr_th = float(start_pose[2] if start_pose is not None else 0.0)
+            goal_th = wrap_pi(curr_th + math.radians(step))
+            log.info(f"scan: heading goal {goal_th}")
+
+            # Closed-loop turning until heading error within tolerance
+            t0 = time.time()
+            safety_timeout = 6.0  # seconds per step
+            while True:
+                # Update pose (and EKF) each loop
+                pose_now = None
                 if callable(get_pose_fn):
                     try:
-                        _ = get_pose_fn()
+                        pose_now = get_pose_fn()
                     except Exception:
-                        pass
-                # Small sleep to avoid tight loop (approximate the chunk time)
-                time.sleep(t_chunk)
-                rotated_t += t_chunk
+                        pose_now = [0.0, 0.0, 0.0]
+                th_now = float(pose_now[2] if pose_now is not None else 0.0)
+                err = wrap_pi(goal_th - th_now)
+                log.info(f"scan: angle: {th_now} with goal {goal_th} --> err = {err}")
+                if abs(err) <= ang_tol:
+                    break
+                # Direction and adaptive turning tick (slow down near goal)
+                turn_dir = 1 if err > 0 else -1
+                # Map |err| in [0, pi] to tick in [min_tick, max_tick]
+                gain = min(1.0, max(0.1, abs(err) / math.pi))
+                tick_cmd = int(max(min_tick, min(max_tick, gain * max_tick)))
+                try:
+                    self.ppi.set_velocity([0, turn_dir], turning_tick=tick_cmd, time=0)
+                except Exception as e:
+                    log.warning("scan: set_velocity failed at step %d/%d: %s", i+1, n_steps, e)
+                    break
+                time.sleep(dt_cmd)
+                if (time.time() - t0) > safety_timeout:
+                    log.warning("scan: heading step timeout at %d/%d (err=%.3f rad)", i+1, n_steps, err)
+                    break
 
             # Short pause to settle, then capture EKF pose and image at this bearing
+            self.ppi.set_velocity([0, 0], turning_tick=tick_cmd, time=0)
             time.sleep(max(0.0, float(pause_s)))
             ang_now = cum_angle + step
             # Capture pose first (closest to capture time)

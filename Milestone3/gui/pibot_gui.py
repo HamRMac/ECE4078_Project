@@ -126,8 +126,8 @@ class PiBotGUI:
         self._clock = pygame.time.Clock()
         log.info("OGViewer init: window=%dx%d scale=%d fps=%d", w, h, self.scale, self.fps)
 
-    def _draw_overlay(self, surf: pygame.Surface, pose_xy: Tuple[float, float]) -> None:
-        """Draw start (green), current (blue), goal (red), and path (blue)."""
+    def _draw_overlay(self, surf: pygame.Surface, pose_xyz: Tuple[float, float, float]) -> None:
+        """Draw start (green), current (blue), goal (red), path (blue), and robot sprite."""
         # Convert numpy OG image to PyGame surface each frame (copy for overlay)
         vis_bgr = self.grid.render(scale=self.scale)
 
@@ -136,9 +136,47 @@ class PiBotGUI:
             r_s, c_s = self.grid.world_to_grid(*self.start_xy)
             cv2.circle(vis_bgr, (int(c_s * self.scale), int(r_s * self.scale)), 6, (0, 200, 0), -1)
 
-        # Current in blue/orange
-        r_r, c_r = self.grid.world_to_grid(float(pose_xy[0]), float(pose_xy[1]))
-        cv2.circle(vis_bgr, (int(c_r * self.scale), int(r_r * self.scale)), 5, (220, 140, 0), -1)
+        # Current in blue/orange and robot sprite
+        rx, ry, rth = float(pose_xyz[0]), float(pose_xyz[1]), float(pose_xyz[2])
+        r_r, c_r = self.grid.world_to_grid(rx, ry)
+        px, py = int(c_r * self.scale), int(r_r * self.scale)
+        cv2.circle(vis_bgr, (px, py), 5, (220, 140, 0), -1)
+
+        # Draw robot top sprite rotated to heading if available
+        try:
+            if not hasattr(self, '_pibot_icon'):
+                self._pibot_icon = cv2.imread('pics/8bit/pibot_top.png', cv2.IMREAD_UNCHANGED)
+            icon = getattr(self, '_pibot_icon', None)
+            if icon is not None and icon.shape[2] == 4:
+                # Resize to target size
+                target_sz = 24
+                icon_rsz = cv2.resize(icon, (target_sz, target_sz), interpolation=cv2.INTER_AREA)
+                # Compute rotation: sprite points left initially; world heading 0 points +x
+                angle_deg = 180.0 - (-rth * 180.0 / np.pi)
+                # Rotate with bounding box
+                M = cv2.getRotationMatrix2D((target_sz / 2.0, target_sz / 2.0), angle_deg, 1.0)
+                cos = abs(M[0, 0]); sin = abs(M[0, 1])
+                nW = int((target_sz * sin) + (target_sz * cos))
+                nH = int((target_sz * cos) + (target_sz * sin))
+                M[0, 2] += (nW / 2.0) - (target_sz / 2.0)
+                M[1, 2] += (nH / 2.0) - (target_sz / 2.0)
+                icon_rot = cv2.warpAffine(icon_rsz, M, (nW, nH), flags=cv2.INTER_LINEAR,
+                                           borderMode=cv2.BORDER_CONSTANT, borderValue=(0, 0, 0, 0))
+                ih, iw = icon_rot.shape[:2]
+                x0 = int(px - iw // 2); y0 = int(py - ih // 2)
+                x1 = x0 + iw; y1 = y0 + ih
+                H, W = vis_bgr.shape[:2]
+                x0c, y0c = max(0, x0), max(0, y0)
+                x1c, y1c = min(W, x1), min(H, y1)
+                if x1c > x0c and y1c > y0c:
+                    roi = vis_bgr[y0c:y1c, x0c:x1c]
+                    ix0, iy0 = x0c - x0, y0c - y0
+                    ix1, iy1 = ix0 + (x1c - x0c), iy0 + (y1c - y0c)
+                    icon_crop = icon_rot[iy0:iy1, ix0:ix1]
+                    alpha = icon_crop[:, :, 3:] / 255.0
+                    roi[:] = (1 - alpha) * roi + alpha * icon_crop[:, :, :3]
+        except Exception:
+            pass
 
         # Draw goal in red
         if self.goal_xy is not None:
@@ -342,7 +380,7 @@ class PiBotGUI:
                     pose = self.get_pose_fn()
                 except Exception:
                     pass
-            self._draw_overlay(self._surface, (float(pose[0]), float(pose[1])))
+            self._draw_overlay(self._surface, (float(pose[0]), float(pose[1]), float(pose[2])))
 
             # Right panel: live video + detector results
             if self._has_cam:
