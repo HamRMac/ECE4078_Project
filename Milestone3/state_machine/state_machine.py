@@ -42,14 +42,30 @@ class PiBotFruitSearchSM(StateMachine):
     T_check_for_remaining_targets_to_end_state = check_for_remaining_targets.to(end_state)
     T_sit_next_to_target_fruit_to_end_state = sit_next_to_target_fruit.to(end_state)
 
+class PiBotFruitSearchSMLevel3(StateMachine):
+    ## ALL STATES
+    # Mapping states
+    scan = State("Scan", initial=True)
+    go_to_target = State("GoToTarget")
+    wait_at_target = State("WaitAtTarget")
+
+    end_state = State("EndState", final=True)
+
+    ## Transitions
+    T_scan_to_go_to_target = scan.to(go_to_target)
+    T_go_to_target_to_wait_at_target = go_to_target.to(wait_at_target)
+    T_go_to_target_to_scan = go_to_target.to(scan)
+    T_wait_at_target_to_scan = wait_at_target.to(scan)
+    T_go_to_target_to_end_state = go_to_target.to(end_state)
+
+
+
+'''
 robotSM = PiBotFruitSearchSM()
 
 graph = DotGraphMachine(robotSM)
 dot = graph()
 dot.write_png("robot_machine.png")
-
-
-'''
 for _ in range(4):
     print(f"State: {robot.current_state.id}")
     if robot.current_state == robot.searching:
