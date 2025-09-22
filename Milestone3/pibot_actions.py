@@ -372,17 +372,24 @@ class PiBotActions:
             angle = 0.0
 
         if angle != 0.0:
-            log.info("approach_fruit: rotating to angle %.1f°", angle)
-            self.ppi.set_velocity([0, 0], turning_tick=turning_tick)
-
-        # rotate to face target direction first
-        if angle != 0.0:
-            duration = self._turn_time_for_angle(angle, turning_tick)
+            # Use closed-loop heading control to turn to the desired heading
+            pose_fn = self.get_pose_fn if callable(self.get_pose_fn) else (lambda: [0.0, 0.0, 0.0])
+            # compute absolute goal heading
             try:
-                self.ppi.set_velocity([0, 1 if angle > 0 else -1], turning_tick=turning_tick, time=duration)
+                curr = pose_fn()
+                curr_th = float(curr[2])
+            except Exception:
+                curr_th = 0.0
+            goal_th = (curr_th + math.radians(angle) + math.pi) % (2.0 * math.pi) - math.pi
+            try:
+                last_tick = self.turn_to_heading(goal_th, pose_fn, turning_tick)
+                # ensure motors stopped from turning
+                try:
+                    self.ppi.set_velocity([0, 0], turning_tick=last_tick, time=0)
+                except Exception:
+                    pass
             except Exception as e:
-                log.warning("approach_fruit: set_velocity failed during turn: %s", e)
-                # attempt to continue
+                log.warning("approach_fruit: closed-loop turn failed: %s", e)
 
         try:
             tick = int(forward_tick)
@@ -445,6 +452,7 @@ class PiBotActions:
             log.info("return_to_scan_point: requested distance %.3f m < 0.01 m. No movement.", dist)
             return
 
+        # Move backward without time-based rotation; ensure heading maintained
         try:
             tick = int(forward_tick)
         except Exception:
@@ -461,6 +469,7 @@ class PiBotActions:
                  dist, tick, v, duration)
 
         try:
+            # Use negative forward command to move backward
             self.ppi.set_velocity([-1, 0], forward_tick=tick, time=duration)
         except Exception as e:
             log.warning("return_to_scan_point: set_velocity failed: %s", e)
@@ -562,6 +571,7 @@ class PiBotActions:
             return None
         angle_deg, distance_m = self._rel_angle_dist(tgt["position"], standoff_m=standoff_m)
         self.last_forward = distance_m
+        # Use closed-loop turning inside approach_fruit
         self.approach_fruit(angle_deg=angle_deg, distance_m=distance_m,
                             turning_tick=turning_tick, forward_tick=forward_tick)
         return {"angle_deg": angle_deg, "distance_m": distance_m}
