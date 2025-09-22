@@ -7,6 +7,7 @@ from navigation.controller import ControllerManager
 from planning.astar import AStarPlanner
 from planning.grid_map import GridMap
 from planning.visibility_helper import compute_safety_mask
+from planning.sector_planner import SectorExplorer
 import numpy as np
 from .world_model import WorldModel
 from .robot_commander import RobotCommander
@@ -63,6 +64,9 @@ class Runner(threading.Thread):
         self._xtrack_thresh: float = 0.15
         self._replan_period_s: float = 2.5
         self._last_plan_by_goal: dict[Tuple[float, float], List[Tuple[float, float]]] = {}
+        # Sector exploration state
+        self._sector_explorer = SectorExplorer(rows=3, cols=3, min_clearance_m=0.10)
+        self._searched_sectors: set[tuple[int, int]] = set()
 
         # modes: 'IDLE' | 'MANUAL_WAYPOINTS' | 'AUTO'
         # Start in IDLE; GUI can send SwitchMode('AUTO') (e.g., press 'S') to begin SM control
@@ -261,11 +265,33 @@ class Runner(threading.Thread):
         
         # EXECUTES IN STATE "CalculateNextSafePoint"
         elif sm_state == 'calculate_next_safe_point':
-            # Placeholder: choose (1,0)
             self.world.set_status(mode='AUTO', sm_state='calculate_next_safe_point', action='choose_safe_point')
-            log.info("SM: CalculateNextSafePoint → planning to (1.2, 1.1)")
-            self._goal = (1.2, 1.1)
-            # plan now from current pose
+            log.info("SM: CalculateNextSafePoint → selecting sector-based safe point")
+            goal = None
+            try:
+                pick = self._sector_explorer.pick_next_target(self.grid, excluded=self._searched_sectors)
+                if pick is not None:
+                    goal, sector_idx, info = pick
+                    # Record sector as searched/excluded for future picks
+                    try:
+                        self._searched_sectors.add(tuple(sector_idx))
+                    except Exception:
+                        pass
+                    log.info("Selected sector %s (dark=%.2f free=%d/%d) → goal @ (%.2f, %.2f)",
+                             str(sector_idx), float(info.dark_fraction), int(info.free_cells), int(info.total_cells), goal[0], goal[1])
+                else:
+                    log.info("No viable sector target found; falling back to map center")
+            except Exception as e:
+                log.warning("Sector selection failed: %s", e)
+
+            if goal is None:
+                try:
+                    bx0, by0, bx1, by1 = self.grid.bounds_wm  # type: ignore
+                    goal = ((bx0 + bx1) * 0.5, (by0 + by1) * 0.5)
+                except Exception:
+                    goal = (0.0, 0.0)
+
+            self._goal = (float(goal[0]), float(goal[1]))
             self._plan_from_current()
             try:
                 self.sm.T_calculate_next_safe_point_to_navigate_to_safe_point()
