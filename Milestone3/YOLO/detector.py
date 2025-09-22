@@ -96,6 +96,21 @@ class Detector:
                         'conf': conf
                     })
 
+                # Horizon clipping: drop boxes whose bottom lies in the top half of the image
+                try:
+                    H = int(img_out.shape[0])
+                except Exception:
+                    H = 0
+                if H > 0:
+                    clipped = []
+                    half = H * 0.5
+                    for it in items:
+                        cx, cy, w, h = [float(v) for v in it['xywh']]
+                        bottom = cy + 0.5 * h
+                        if bottom >= half:
+                            clipped.append(it)
+                    items = clipped
+
                 # Suppress overlapping boxes (keep highest-confidence)
                 kept = self._suppress_overlaps(items, self.overlap_iou_thresh)
 
@@ -140,6 +155,21 @@ class Detector:
                     'xywh': box_cord.astype(float),
                     'conf': conf
                 })
+
+        # Horizon clipping: drop boxes whose bottom lies in the top half of the image
+        try:
+            H = int(cv_img.shape[0])
+        except Exception:
+            H = 0
+        if H > 0 and items:
+            filtered = []
+            half = H * 0.5
+            for it in items:
+                cx, cy, w, h = [float(v) for v in it['xywh']]
+                bottom = cy + 0.5 * h
+                if bottom >= half:
+                    filtered.append(it)
+            items = filtered
 
         # Suppress overlapping boxes (keep highest-confidence)
         kept = self._suppress_overlaps(items, self.overlap_iou_thresh)

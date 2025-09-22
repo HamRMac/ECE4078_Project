@@ -282,7 +282,7 @@ class RunnerL3(threading.Thread):
         except Exception:
             return False
 
-    def _attempt_beeline(self, target_name: str, target_xy: Tuple[float, float], stop_radius_m: float = 0.25) -> bool:
+    def _attempt_beeline_pose(self, target_name: str, target_xy: Tuple[float, float], stop_radius_m: float = 0.25) -> bool:
         """Try a direct LOS crawl toward the target, ignoring dark cells.
 
         Returns True if we executed a beeline and ended within stop_radius_m; False otherwise.
@@ -310,7 +310,7 @@ class RunnerL3(threading.Thread):
         self._plan_waypoints = [(gx, gy)]
         self._wp_idx = 0
         self.world.set_plan(self._plan_waypoints, active_idx=self._wp_idx)
-        self.world.set_status(mode='AUTO', sm_state='L3', action='beeline', target=target_name)
+        self.world.set_status(mode='AUTO', sm_state='L3', action='beeline_pose', target=target_name)
         log.debug("Beeline to %s at (%.2f, %.2f) from (%.2f, %.2f)", target_name, tx, ty, rx, ry)
         t0 = time.time()
         timeout = 8.0  # safety cap for straight drive
@@ -325,6 +325,130 @@ class RunnerL3(threading.Thread):
                 break
             time.sleep(self._period)
         return self._dist(self.get_pose_fn()[:2], (tx, ty)) <= stop_radius_m
+
+    def _attempt_beeline_yolo(self, target_name: str, target_xy: Tuple[float, float], stop_radius_m: float = 0.25) -> bool:
+        """Use detector to center the target in view and slow-crawl forward until in range.
+
+        Fallback: returns False if detector or required metadata unavailable, or if no
+        matching detection is found within a short time window.
+        """
+        if self.detector is None or self.fruit_ranger is None or not isinstance(self.target_dims, dict):
+            return False
+        dims = self.target_dims.get(str(target_name))
+        if not isinstance(dims, (list, tuple)) or len(dims) < 3:
+            return False
+        true_h = float(dims[2])
+        # Control params for slow crawl
+        turn_tick_base = 12
+        fwd_tick_crawl = 18
+        dt = 0.10
+        timeout = 10.0
+        not_found_patience = 12  # ~1.2s
+        missing = 0
+        t0 = time.time()
+        cx_img = 160.0
+        f = 320.0
+        try:
+            K = getattr(self.fruit_ranger, 'camera_matrix', None)
+            if K is not None:
+                f = float(K[0, 0])
+                cx_img = float(K[0, 2])
+        except Exception:
+            pass
+
+        self.world.set_status(mode='AUTO', sm_state='L3', action='beeline_yolo', target=target_name)
+
+        while not self._stop.is_set():
+            # Acquire frame
+            frame = None
+            try:
+                frame = self.actions.ppi.get_image() if (self.actions is not None) else None
+            except Exception:
+                frame = None
+            if frame is None:
+                return False
+            # Ensure BGR for detector
+            try:
+                import cv2
+                frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+            except Exception:
+                frame_bgr = frame
+
+            # Detect and filter for target class
+            try:
+                det_out = self.detector.detect_single_image(frame_bgr)
+                detections = det_out[0] if isinstance(det_out, (list, tuple)) else det_out
+            except Exception:
+                detections = []
+            # pick best by largest area
+            cand = None
+            best_area = -1.0
+            for d in detections or []:
+                try:
+                    lab = str(d[0])
+                    if lab != str(target_name):
+                        continue
+                    x, y, w, h = [float(v) for v in d[1]]
+                    area = w * h
+                    if area > best_area:
+                        best_area = area
+                        cand = (x, y, w, h)
+                except Exception:
+                    continue
+
+            if cand is None:
+                missing += 1
+                if missing > not_found_patience or (time.time() - t0) > timeout:
+                    return False
+                # small search turn to try reacquire
+                if self._drive_enabled:
+                    self.cmd.set_velocity([0, 1], turning_tick=10, time=0)
+                time.sleep(dt)
+                continue
+
+            missing = 0
+            # Centering control (proportional on pixel error)
+            x, y, w, h = cand
+            cx = x + w / 2.0
+            err_px = float(cx_img - cx)
+            # approx angle ~ atan(err/f) ≈ err/f for small
+            ang = err_px / max(1.0, f)
+            turn_dir = 0
+            turn_tick = 0
+            if abs(ang) > 0.01:
+                turn_dir = 1 if ang > 0 else -1
+                turn_tick = int(min(18, max(8, abs(ang) * 200)))
+
+            # Range estimate from bbox height
+            est = None
+            try:
+                est = self.fruit_ranger.from_bbox_height([x, y, w, h], true_h)
+            except Exception:
+                est = None
+            in_range = False
+            if est is not None:
+                in_range = float(est.get('r', 1e9)) <= (stop_radius_m + 0.02)
+            else:
+                # fallback: EKF distance
+                pose = self.get_pose_fn()
+                in_range = self._dist((pose[0], pose[1]), target_xy) <= stop_radius_m
+
+            if in_range:
+                if self._drive_enabled:
+                    self.cmd.stop()
+                return True
+
+            # Issue slow-crawl command
+            if self._drive_enabled:
+                self.cmd.set_velocity([1, turn_dir], tick=fwd_tick_crawl, turning_tick=turn_tick if turn_tick>0 else 10, time=0)
+
+            if (time.time() - t0) > timeout:
+                break
+            time.sleep(dt)
+
+        if self._drive_enabled:
+            self.cmd.stop()
+        return False
 
     def _scan_and_update(self):
         # Execute scan (drive-based) if available
@@ -477,8 +601,15 @@ class RunnerL3(threading.Thread):
                     except Exception:
                         pass
                     break  # next target
-                # 2) Beeline if LOS free (static+dynamic only)
-                if self._attempt_beeline(name, txy, stop_radius_m=0.25):
+                # 2) Beeline: prefer detector-guided crawl, else LOS pose-based
+                beeline_ok = False
+                try:
+                    beeline_ok = self._attempt_beeline_yolo(name, txy, stop_radius_m=0.25)
+                except Exception:
+                    beeline_ok = False
+                if not beeline_ok:
+                    beeline_ok = self._attempt_beeline_pose(name, txy, stop_radius_m=0.25)
+                if beeline_ok:
                     print(f"Reached {name}")
                     time.sleep(2.0)
                     try:
