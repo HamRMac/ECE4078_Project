@@ -285,7 +285,7 @@ class PiBotActions:
                                     wy = ry + r * math.sin(rth + th)
                                     log.debug("scan: class='%s' bbox=[%.1f,%.1f,%.1f,%.1f] => r=%.3f m, θ=%.3f rad => @ (%.3f, %.3f)", label, x, y, w, h, r, th, wx, wy)
 
-                                    if (r <= 0.8):
+                                    if (r <= 1.0):
                                         world_ok = True
 
                             except Exception as e:

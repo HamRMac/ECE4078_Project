@@ -560,7 +560,7 @@ class RunnerL3(threading.Thread):
 
         # Append known targets to static exclusion map
         try:
-            self._apply_static_target_exclusions([xy for _, xy in self._route], fruit_radius_m=0.05)
+            self._apply_static_target_exclusions([xy for _, xy in self._route], fruit_radius_m=0.1)
         except Exception:
             pass
 
@@ -640,12 +640,14 @@ class RunnerL3(threading.Thread):
                     break  # next target
                 # 2) Beeline: prefer detector-guided crawl, else LOS pose-based
                 beeline_ok = False
+                '''
                 try:
                     beeline_ok = self._attempt_beeline_yolo(name, txy, stop_radius_m=0.25)
                 except Exception:
                     beeline_ok = False
                 if not beeline_ok:
                     beeline_ok = self._attempt_beeline_pose(name, txy, stop_radius_m=0.25)
+                '''
                 if beeline_ok:
                     print(f"Reached {name}")
                     time.sleep(2.0)
