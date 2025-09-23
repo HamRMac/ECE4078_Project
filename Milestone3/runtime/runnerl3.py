@@ -163,30 +163,40 @@ class RunnerL3(threading.Thread):
 
     def _plan_approach_to_target(self, target_xy: Tuple[float, float], radius_m: float = 0.20) -> bool:
         """Plan to a standoff point on the circle of radius 'radius_m' around the target.
-        Tries angles biased towards direction from robot.
+        For this radius, evaluate all candidate approach points and pick the shortest successful path.
         """
-        rx, ry, _ = self.get_pose_fn()
+        pose = self.get_pose_fn()
+        rx, ry = float(pose[0]), float(pose[1])
         tx, ty = float(target_xy[0]), float(target_xy[1])
         base_th = math.atan2(ty - ry, tx - rx)
         Ks = 24
         angles = [((base_th + 2 * math.pi * i / Ks + math.pi) % (2 * math.pi)) - math.pi for i in range(Ks)]
-        order = []
-        mid = Ks // 2
-        for i in range(Ks):
-            j = (i // 2) * (-1 if i % 2 else 1)
-            order.append((mid + j) % Ks)
+        # Evaluate all candidates at this radius; keep best by A* grid cost
         occ = self.grid.combined()
-        for idx in order:
-            ang = angles[idx]
+        best = None  # (cost, PlanResult, (wx, wy))
+        for ang in angles:
             wx = tx + radius_m * math.cos(ang)
             wy = ty + radius_m * math.sin(ang)
             r, c = self.grid.world_to_grid(wx, wy)
             if int(occ[r, c]) != 0:
                 continue
-            self._goal = (wx, wy)
-            if self._plan_from_current():
-                return True
-        return False
+            pr = self.planner.plan(self.grid, (rx, ry), (wx, wy))
+            if pr is None:
+                continue
+            cost = float(pr.cost)
+            if best is None or cost < best[0]:
+                best = (cost, pr, (wx, wy))
+        if best is None:
+            return False
+        # Install the best plan directly
+        _, pr_best, goal_xy = best
+        self._goal = (float(goal_xy[0]), float(goal_xy[1]))
+        self._plan_waypoints = list(pr_best.pruned_world if pr_best.pruned_world else pr_best.path_world)
+        self._wp_idx = 0
+        self.world.set_plan(self._plan_waypoints, active_idx=self._wp_idx)
+        self.world.set_status(action='drive', progress=f"0/{len(self._plan_waypoints)}")
+        self._just_replanned = True
+        return True
 
     def _find_nearest_free_xy_around(self, target_xy: Tuple[float, float], max_radius_cells: int = 60) -> Optional[Tuple[float, float]]:
         """Find nearest free grid cell around the given world (x,y) and return its world coords."""
