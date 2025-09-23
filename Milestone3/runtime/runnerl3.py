@@ -560,7 +560,7 @@ class RunnerL3(threading.Thread):
 
         # Append known targets to static exclusion map
         try:
-            self._apply_static_target_exclusions([xy for _, xy in self._route], fruit_radius_m=0.1)
+            self._apply_static_target_exclusions([xy for _, xy in self._route], fruit_radius_m=0.15)
         except Exception:
             pass
 
@@ -701,9 +701,9 @@ class RunnerL3(threading.Thread):
                     dist = self._dist((pose[0], pose[1]), txy)
                     if dist <= 0.25:
                         print(f"Reached {name}")
+                        self.cmd.stop()
                         time.sleep(2.0)
                         self._plan_waypoints = []
-                        self.cmd.stop()
                         # mirror collection update here to avoid re-scanning and double-reporting
                         try:
                             info = self.world.get_targets_info()
