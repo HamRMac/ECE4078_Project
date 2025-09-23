@@ -122,6 +122,16 @@ class RunnerL3(threading.Thread):
     def _maybe_replan(self, pose):
         if not self._plan_waypoints or self._goal is None:
             return
+        # If robot's current cell is occupied, keep following the existing plan instead of replanning.
+        # This prevents a replan loop where the planner repeatedly shifts the start to the nearest free cell.
+        try:
+            occ = self.grid.combined()
+            r, c = self.grid.world_to_grid(float(pose[0]), float(pose[1]))
+            if int(occ[r, c]) != 0:
+                # Inside an exclusion/occupied zone: do not trigger replans based on cross-track error.
+                return
+        except Exception:
+            pass
         try:
             xtrack = AStarPlanner.cross_track_error((pose[0], pose[1]), self._plan_waypoints)
             if xtrack > self._xtrack_thresh:
@@ -333,6 +343,7 @@ class RunnerL3(threading.Thread):
         if not ok:
             return False
         gx, gy = goal
+        tx, ty = float(target_xy[0]), float(target_xy[1])
         # Install line for GUI (red) and crawl
         self._goal = (gx, gy)
         self._plan_waypoints = [(rx, ry), (gx, gy)]
@@ -583,7 +594,7 @@ class RunnerL3(threading.Thread):
 
         # Visit targets in order with scan → approach loop
         for idx, (name, txy) in enumerate(self._route):
-            log.info("Heading to target %d/%d: %s at (%.2f, %.2f)", idx + 1, len(self._route), name, txy[0], txy[1])
+            log.info("🎯 Heading to target %d/%d: %s at (%.2f, %.2f)", idx + 1, len(self._route), name, txy[0], txy[1])
             if self._stop.is_set():
                 break
             # Mark this as the active target in the world model
@@ -612,7 +623,7 @@ class RunnerL3(threading.Thread):
                 self.world.set_pose(pose)
                 dist = self._dist((pose[0], pose[1]), txy)
                 if dist <= 0.25:
-                    print(f"Reached {name}")
+                    print(f"🎯 <-- Reached {name}")
                     time.sleep(2.0)
                     # Update targets info: mark as collected
                     try:
