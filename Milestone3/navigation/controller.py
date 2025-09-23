@@ -11,7 +11,7 @@ log = logging.getLogger(__name__)
 
 class BaseController:
     def __init__(self,
-                 pos_tol: float = 0.08,
+                 pos_tol: float = 0.05,
                  ang_tol: float = 0.2,
                  max_forward_tick: int = 80,
                  min_forward_tick: int = 20,
