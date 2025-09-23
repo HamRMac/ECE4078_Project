@@ -670,7 +670,7 @@ class RunnerL3(threading.Thread):
                     beeline_ok = self._attempt_beeline_pose(name, txy, stop_radius_m=0.25)
                 '''
                 if beeline_ok:
-                    print(f"Reached {name}")
+                    print(f"🎯 <-- Reached {name}")
                     time.sleep(2.0)
                     try:
                         info = self.world.get_targets_info()
@@ -721,7 +721,7 @@ class RunnerL3(threading.Thread):
                         pass
                     dist = self._dist((pose[0], pose[1]), txy)
                     if dist <= 0.25:
-                        print(f"Reached {name}")
+                        print(f"🎯 <-- Reached {name}")
                         self.cmd.stop()
                         time.sleep(2.0)
                         self._plan_waypoints = []

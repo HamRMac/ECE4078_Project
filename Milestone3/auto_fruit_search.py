@@ -844,6 +844,7 @@ def main():
         try:
             runner.stop()
             runner.join(timeout=2.0)
+            commander.stop()
         except Exception:
             pass
     log.info("PiBotGUI closed; exiting program")
