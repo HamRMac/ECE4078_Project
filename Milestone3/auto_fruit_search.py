@@ -587,7 +587,7 @@ def _init_ekf_and_aruco(args):
     log.info("Initialising EKF using calibration dir: %s", args.calib_dir)
     ekfInstance = init_ekf(args.calib_dir, args.ip)
     try:
-        ekfInstance.seed_from_map_file(args.map, initial_covariance=1e-10, only_aruco=True)
+        ekfInstance.seed_from_map_file(args.map, initial_covariance=1e-4, only_aruco=True)
         log.info("[EKF] Seeded ArUco landmarks from map: %s", args.map)
     except Exception as e:
         log.warning("[EKF] Seeding from map failed: %s", e)

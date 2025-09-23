@@ -121,12 +121,53 @@ class AStarPlanner:
         if not (0 <= s[0] < H and 0 <= s[1] < W and 0 <= g[0] < H and 0 <= g[1] < W):
             log.warning("A*: start or goal out of bounds s=%s g=%s size=(%d,%d)", str(s), str(g), H, W)
             return None
-        # Allow planning when starting inside an exclusion/occupied zone; only require goal to be free.
+        # Goal must be free
         if not self._is_free(occ, g):
             log.info("A*: goal cell blocked; cannot plan. s_free=%s g_free=%s", self._is_free(occ, s), self._is_free(occ, g))
             return None
+        # If start is blocked, shift to nearest free cell using a ring search
         if not self._is_free(occ, s):
-            log.info("A*: starting inside occupied/exclusion cell; attempting to escape via free neighbors.")
+            log.info("A*: start %s is occupied; searching nearest free cell.", str(s))
+
+            def _nearest_free_cell(start_rc: Coord) -> Optional[Coord]:
+                r0, c0 = start_rc
+                # Check bounds again defensively
+                if not (0 <= r0 < H and 0 <= c0 < W):
+                    return None
+                # If inside, but free (shouldn't happen here), return
+                if self._is_free(occ, (r0, c0)):
+                    return (r0, c0)
+                max_rad = max(H, W)
+                for rad in range(1, max_rad):
+                    rmin = max(0, r0 - rad); rmax = min(H - 1, r0 + rad)
+                    cmin = max(0, c0 - rad); cmax = min(W - 1, c0 + rad)
+                    best: Optional[Coord] = None
+                    best_d2 = float("inf")
+                    # Top and bottom rows of the ring
+                    for c in range(cmin, cmax + 1):
+                        for r in (rmin, rmax):
+                            if 0 <= r < H and 0 <= c < W and self._is_free(occ, (r, c)):
+                                d2 = (r - r0) * (r - r0) + (c - c0) * (c - c0)
+                                if d2 < best_d2:
+                                    best_d2 = d2; best = (r, c)
+                    # Left and right columns of the ring
+                    for r in range(rmin, rmax + 1):
+                        for c in (cmin, cmax):
+                            if 0 <= r < H and 0 <= c < W and self._is_free(occ, (r, c)):
+                                d2 = (r - r0) * (r - r0) + (c - c0) * (c - c0)
+                                if d2 < best_d2:
+                                    best_d2 = d2; best = (r, c)
+                    if best is not None:
+                        return best
+                return None
+
+            s_new = _nearest_free_cell(s)
+            if s_new is None:
+                log.info("A*: no nearby free start cell found from %s; planning aborted.", str(s))
+                return None
+            if s_new != s:
+                log.info("A*: shifted start from %s to nearest free %s", str(s), str(s_new))
+                s = s_new
 
         # Standard A*: allow duplicates in heap, discard stale entries on pop.
         open_heap: List[Tuple[float, float, Coord]] = []  # (f, g, node)
