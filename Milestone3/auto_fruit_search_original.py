@@ -1,5 +1,9 @@
+# This is the original M3 level 3 code for the most part. Might need to uncomment a through things.
+
+
 # M3 - Autonomous fruit searching
-# Level 1: Semi-auto with waypoints
+# Level 1: Semi-auto wit    # TODO: replace with your codes to estimate the pose of the robot
+    # We STRONGLY RECOMMEND you to use your SLAM code from M2 hereh waypoints
 
 # basic python packages
 import sys, os
@@ -64,8 +68,6 @@ class _ColoredFormatter(logging.Formatter):
         return msg
 
 def read_true_map(fname):
-    # For now just grabs the marker coords.
-
     """Read the ground truth map and output the pose of the ArUco markers and 5 target fruits&vegs to search for
 
     @param fname: filename of the map
@@ -125,6 +127,35 @@ def read_search_list(list_path):
     return search_list
 
 
+def print_target_fruits_pos(search_list, fruit_list, fruit_true_pos):
+    """Print out the target fruits' pos in the search order
+
+    @param search_list: search order of the fruits
+    @param fruit_list: list of target fruits
+    @param fruit_true_pos: positions of the target fruits
+
+    @output ordered list of positions of the target fruit
+    """
+    search_poses = []
+    print("Search order:")
+    n_fruit = 1
+    for fruit in search_list:
+        # Only print coordinates if present in provided map
+        for i in range(len(fruit_list)):
+            if fruit == fruit_list[i]:
+                try:
+                    search_poses.append([fruit_true_pos[i][0],fruit_true_pos[i][1]])
+                    print('{}) {} at [{}, {}]'.format(
+                        n_fruit,
+                        fruit,
+                        np.round(fruit_true_pos[i][0], 1),
+                        np.round(fruit_true_pos[i][1], 1)))
+                except Exception:
+                    # In minimal map there may be no fruit positions
+                    print('{}) {}'.format(n_fruit, fruit))
+        n_fruit += 1
+
+    return search_poses
 
 
 # Waypoint navigation
@@ -146,6 +177,7 @@ def drive_to_point(waypoint, robot_pose, controller_kind: str = "ttg"):
 
     # Select controller
     ctrl_mgr = ControllerManager(controller_kind)
+
     t0 = time.time()
     arrived = False
 
@@ -162,6 +194,7 @@ def drive_to_point(waypoint, robot_pose, controller_kind: str = "ttg"):
             arrived = True
             break
         penguinpiInstance.set_velocity([fwd_cmd, turn_cmd], tick=fwd_tick, turning_tick=turn_tick, time=0)
+
         time.sleep(dt_loop)
 
     # Stop safely
@@ -223,7 +256,17 @@ def get_robot_pose(penguin_pi, aruco_detector, ekf):
 
     return robot_pose
 
+def calc_waypoint(search_pose, robot_pose, d=0):
+    # Returns waypoint for next fruit from current position, needs the pose of the next target fruit, current robot pose and the distance from the centre of the fruit the waypoint should be
+    # Should be run once at the start of the run and once again every time a successive waypoint is reached
+    th = np.arctan2(robot_pose[1]-search_pose[1],robot_pose[0]-search_pose[0])
 
+    x_waypoint = search_pose[0] + d * np.cos(th)
+    y_waypoint = search_pose[1] + d * np.sin(th)
+
+    waypoint = [x_waypoint, y_waypoint]
+
+    return waypoint
     
 
 
@@ -244,7 +287,7 @@ def init_ekf(datadir, ip):
 
 
 ###### Live target estimation helpers and thread ######
-TARGET_TYPES = ['orange','lemon','pear','tomato','capsicum','potato','pumpkin','garlic']
+TARGET_TYPES = ['orange','lemon','lime','tomato','capsicum','potato','pumpkin','garlic']
 
 
 def estimate_pose(camera_matrix, obj_info, robot_pose, use_fusion=False, cam_height_m=0.20, cam_pitch_rad=0.0):
@@ -461,8 +504,8 @@ class LiveTargetEstimator(threading.Thread):
 def _parse_args():
     parser = argparse.ArgumentParser("Fruit searching")
     # For Level 3, default to the L3 map; only accept levels 3 or 4
-    parser.add_argument("--map", type=str, default='map.txt', help='Path to map file (Default: map.txt)')
-    parser.add_argument("--shopping_list", type=str, default='shopping_list.txt', help='Path to shopping list file')
+    parser.add_argument("--map", type=str, default='james_house_l3_map.txt', help='Path to map file (L3 default: james_house_l3_map.txt)')
+    parser.add_argument("--shopping_list", type=str, default='M3_prac_shopping_list.txt', help='Path to shopping list file')
     parser.add_argument("--calib_dir", type=str, default='calibration/param/', help='Directory containing calibration files')
     parser.add_argument("--ip", metavar='', type=str, default='192.168.50.1')
     parser.add_argument("--port", metavar='', type=int, default=8080)
@@ -506,25 +549,33 @@ def _init_penguinpi(args):
     log.info("Connecting to PenguinPi (ip=%s, port=%s)", args.ip, args.port)
     return PenguinPi(args.ip, args.port)
 
-def _load_map_and_shopping(args):
-    """Load map and shopping list when fruit positions are unknown.
 
-    Returns:
-        aruco_true_pos: np.ndarray of shape (10,2)
-        aruco_true_pos_id: np.ndarray of shape (10,3)
-        search_list: list of fruit names (from shopping list)
-        search_poses: list of placeholder [None,None] positions
-        known_targets: empty dict
+def _load_map_and_shopping(args):
+    """Load map and shopping list.
+
+    For Level 3: expects keys like 'lemon_0' and 'aruco1_0'. Fruit keys are normalised by stripping the trailing
+    '_0' to match shopping list entries. Returns also a dict mapping fruit -> (x,y) for quick lookup.
     """
     log.info("Loading map file: %s", args.map)
-    aruco_true_pos, aruco_true_pos_id = read_true_map(args.map)
+    fruits_list, fruits_true_pos, aruco_true_pos, aruco_true_pos_id = read_true_map(args.map)
     search_list = read_search_list(args.shopping_list)
 
-    known_targets = {}  # no known fruit positions
-    search_poses = [[None, None] for _ in search_list]
+    # Build fruit -> (x, y) dict (names already stripped by read_true_map)
+    known_targets = {}
+    try:
+        for i, name in enumerate(fruits_list):
+            if i < len(fruits_true_pos):
+                known_targets[str(name)] = (float(fruits_true_pos[i][0]), float(fruits_true_pos[i][1]))
+    except Exception:
+        pass
 
-    log.info("Loaded shopping list (positions unknown): %s", search_list)
-    return aruco_true_pos, aruco_true_pos_id, search_list, search_poses, known_targets
+    search_poses = []
+    try:
+        search_poses = print_target_fruits_pos(search_list, fruits_list, fruits_true_pos)
+    except Exception:
+        log.info("Loaded shopping list (positions not available in minimal map).")
+
+    return (fruits_list, fruits_true_pos, aruco_true_pos, aruco_true_pos_id, search_list, search_poses, known_targets)
 
 
 def _build_grid_from_aruco(aruco_true_pos: np.ndarray) -> GridMap:
@@ -660,8 +711,7 @@ def main():
     penguinpiInstance = _init_penguinpi(args)
 
     # 2) Map + shopping list (+ known targets for L3)
-    aruco_true_pos, aruco_true_pos_id, search_list, search_poses, known_targets = _load_map_and_shopping(args)
-
+    fruits_list, fruits_true_pos, aruco_true_pos, aruco_true_pos_id, search_list, search_poses, known_targets = _load_map_and_shopping(args)
 
     # 3) Occupancy grid
     gridMapInstance = _build_grid_from_aruco(aruco_true_pos)
