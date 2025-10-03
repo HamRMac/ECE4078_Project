@@ -24,6 +24,8 @@ import numpy as np
 import pygame
 import cv2
 
+import pdb
+
 # Debugger
 import pdb;
 
@@ -135,7 +137,7 @@ class PiBotGUI:
     def _draw_overlay(self, surf: pygame.Surface, pose_xyz: Tuple[float, float, float]) -> None:
         """Draw start (green), current (blue), goal (red), path (blue), and robot sprite."""
         # Convert numpy OG image to PyGame surface each frame (copy for overlay)
-        vis_bgr = self.grid.render(scale=self.scale)
+        vis_bgr = self.grid.render(scale=self.scale, split_layers=True)
 
         # Draw sector overlays if provided
         if callable(getattr(self, 'sector_provider', None)):

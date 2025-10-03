@@ -249,13 +249,35 @@ class GridMap:
         return clearance_m
 
     # ---------------- Visualisation ----------------
-    def render(self, scale: int = 3) -> np.ndarray:
-        """Return a BGR image for visualisation of the occupancy grid."""
-        occ = self.combined()
-        vis = cv2.cvtColor(255 - occ, cv2.COLOR_GRAY2BGR)
+    def render(self, scale: int = 3, split_layers: bool = False) -> np.ndarray:
+        """Return a BGR image for visualisation of the occupancy grid.
+
+        When `split_layers` is True, static obstacles are shown in red and
+        dynamic obstacles in black (free space white). Otherwise, the combined
+        occupancy is rendered in grayscale (black = occupied, white = free).
+        """
+        if split_layers:
+            assert self.static_layer is not None and self.dynamic_layer is not None, "Grid not built yet."
+            H, W = self.static_layer.shape
+            # Start with white background
+            vis = np.full((H, W, 3), 255, dtype=np.uint8)
+            # Masks
+            static_m = self.static_layer > 0
+            dynamic_m = self.dynamic_layer > 0
+            # Colors (BGR): red for static, green for dynamic, black for safety
+            if self.safety_layer is not None:
+                vis[self.safety_layer > 0] = (0, 0, 0)
+            
+            vis[static_m] = (0, 0, 255)
+            vis[dynamic_m] = (0, 255, 0)
+        else:
+            occ = self.combined()
+            vis = cv2.cvtColor(255 - occ, cv2.COLOR_GRAY2BGR)
+        
         if scale != 1:
             H, W = vis.shape[:2]
             vis = cv2.resize(vis, (W * scale, H * scale), interpolation=cv2.INTER_NEAREST)
+        
         # Draw metadata text
         cv2.putText(
             vis,
