@@ -137,7 +137,7 @@ class Detector:
 
                 box_label = box.cls  # class label of the box
 
-                bounding_boxes.append([prediction.names[int(box_label)], np.asarray(box_cord)])
+                bounding_boxes.append([prediction.names[int(box_label)], np.asarray(box_cord.cpu())])
 
         return bounding_boxes
 
