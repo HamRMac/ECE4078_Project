@@ -121,7 +121,7 @@ def estimate_pose(camera_matrix, obj_info, robot_pose):
     true_height = target_dimensions_dict[target_class][2]
     pixel_height = target_box[3]; pixel_center = target_box[0]
     distance = true_height/pixel_height * focal_length
-    image_width = 320
+    image_width = 384
     x_shift = image_width/2 - pixel_center
     theta = np.arctan(x_shift/focal_length)
     distance_obj = distance/np.cos(theta)
