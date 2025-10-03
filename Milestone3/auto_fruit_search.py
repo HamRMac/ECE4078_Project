@@ -508,7 +508,7 @@ def _parse_args():
     parser.add_argument("--controller", type=str, default='ttg', choices=['ttg','ppc','rhp'], help='Controller type')
     parser.add_argument("--no_run", action='store_true', help='Only load map and grid; do not start autonomy')
     parser.add_argument("--log", type=str, default='INFO', choices=['DEBUG','INFO','WARNING','ERROR','CRITICAL'], help='Logging level')
-    parser.add_argument("--model", type=str, default='', help='YOLO model path (optional)')
+    parser.add_argument("--model", type=str, default='models/PiBotAiMk2_V5.pt', help='YOLO model path (optional)')
     parser.add_argument("--use_fusion", action='store_true', help='Fuse bbox-height with bottom-pixel ground-ray for fruit range')
     # Pose smoothing (control/GUI)
     parser.add_argument("--pose_smoothing", action='store_true', help='Enable EMA + rate-limited smoothed pose for control/GUI')
