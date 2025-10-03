@@ -3,6 +3,8 @@
 ##
 ## Get latest from https://github.com/github/gitignore/blob/main/VisualStudio.gitignore
 
+
+
 # User-specific files
 *.rsuser
 *.suo
@@ -419,3 +421,9 @@ videos
 *.msm
 *.msp
 .DS_Store
+
+
+videos
+
+*/TODO.md
+*/controlplan.md
