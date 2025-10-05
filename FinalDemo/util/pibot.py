@@ -205,8 +205,7 @@ class PenguinPi:
                 if prev_counts is not None and prev_stamp is not None:
                     dt = stamp - prev_stamp  
                     if dt > 1e-6:
-                        vel = ((body_counts - prev_counts) / dt) / 10 # Divide by 10 to convert from encoder_ticks/s to command_ticks/s
-                        print(f"{dt} -> {vel}")
+                        vel = ((body_counts - prev_counts) / dt) / 10  # Divide by 10 to convert from encoder_ticks/s to command_ticks/s
                         with self._encoder_lock:
                             self._wheel_vel_meas = vel
                             self._wheel_vel_meas_time = time_module.monotonic()

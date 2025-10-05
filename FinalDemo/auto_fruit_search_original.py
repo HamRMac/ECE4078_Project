@@ -279,7 +279,6 @@ def init_ekf(datadir, ip):
     fileB = "{}baseline.txt".format(datadir)
     baseline = np.loadtxt(fileB, delimiter=',')
     robot = Robot(baseline, scale, camera_matrix, dist_coeffs)
-    robot.wheel_speed_scale_is_ticks = False
     return EKF(robot)
 
 
@@ -545,12 +544,6 @@ def _configure_logging(level: str):
 def _init_penguinpi(args):
     log.info("Connecting to PenguinPi (ip=%s, port=%s)", args.ip, args.port)
     pibot = PenguinPi(args.ip, args.port)
-    try:
-        scale_path = os.path.join(args.calib_dir, "scale.txt")
-        scale_val = float(np.loadtxt(scale_path, delimiter=','))
-        pibot.set_distance_scale(scale_val)
-    except Exception as e:
-        log.warning("PenguinPi: using default scale (failed to load calibration: %s)", e)
     if args.ip != 'localhost':
         try:
             pibot.start_encoder_monitor(rate_hz=10.0)

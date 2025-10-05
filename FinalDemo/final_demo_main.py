@@ -124,54 +124,6 @@ def read_search_list(list_path):
 
     return search_list
 
-
-
-
-# Waypoint navigation
-# the robot automatically drives to a given [x,y] coordinate
-# note that this function requires your camera and wheel calibration parameters from M2, and the "util" folder from M1
-# fully automatic navigation:
-# try developing a path-finding algorithm that produces the waypoints automatically
-def drive_to_point(waypoint, robot_pose, controller_kind: str = "ttg"):
-    # imports camera / wheel calibration parameters
-    fileS = "calibration/param/scale.txt"
-    scale = np.loadtxt(fileS, delimiter=',')
-    fileB = "calibration/param/baseline.txt"
-    baseline = np.loadtxt(fileB, delimiter=',')
-
-    # Control parameters
-    ctrl_rate_hz = 10.0
-    dt_loop = 1.0 / ctrl_rate_hz
-    max_duration = 20.0  # seconds safety timeout
-
-    # Select controller
-    ctrl_mgr = ControllerManager(controller_kind)
-    t0 = time.time()
-    arrived = False
-
-    while True:
-        # Safety timeout
-        if time.time() - t0 > max_duration:
-            print("[drive_to_point] Timeout; stopping.")
-            break
-
-        # Refresh pose from EKF
-        pose = get_robot_pose(penguinpiInstance, aruco_detector, ekfInstance)
-        fwd_cmd, turn_cmd, fwd_tick, turn_tick, done = ctrl_mgr.compute(pose, waypoint)
-        if done:
-            arrived = True
-            break
-        penguinpiInstance.set_velocity([fwd_cmd, turn_cmd], tick=fwd_tick, turning_tick=turn_tick, time=0)
-        time.sleep(dt_loop)
-
-    # Stop safely
-    penguinpiInstance.set_velocity([0, 0])
-    if arrived:
-        log.info("Arrived at waypoint (%.2f, %.2f)", waypoint[0], waypoint[1])
-    else:
-        log.info("Stopped before arrival at waypoint (%.2f, %.2f)", waypoint[0], waypoint[1])
-
-
 def get_robot_pose(penguin_pi, aruco_detector, ekf):
     # Dummy robot_pose
     robot_pose = [0.0,0.0,0.0] # will be replaced by EKF state below
@@ -232,7 +184,6 @@ def init_ekf(datadir, ip):
     fileB = "{}baseline.txt".format(datadir)
     baseline = np.loadtxt(fileB, delimiter=',')
     robot = Robot(baseline, scale, camera_matrix, dist_coeffs)
-    robot.wheel_speed_scale_is_ticks = False
     return EKF(robot)
 
 
@@ -498,12 +449,6 @@ def _configure_logging(level: str):
 def _init_penguinpi(args):
     log.info("Connecting to PenguinPi (ip=%s, port=%s)", args.ip, args.port)
     pibot = PenguinPi(args.ip, args.port)
-    try:
-        scale_path = os.path.join(args.calib_dir, "scale.txt")
-        scale_val = float(np.loadtxt(scale_path, delimiter=','))
-        pibot.set_distance_scale(scale_val)
-    except Exception as e:
-        log.warning("PenguinPi: using default scale (failed to load calibration: %s)", e)
     if args.ip != 'localhost':
         try:
             pibot.start_encoder_monitor(rate_hz=10.0)
