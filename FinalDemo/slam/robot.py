@@ -2,10 +2,10 @@ import numpy as np
 
 class Robot:
     def __init__(self, wheels_width, wheels_scale, camera_matrix, camera_dist):
-        print("Initialising robot.py V1.0")
+        print("Initialising robot.py V2.0")
         # State is a vector of [x,y,theta]'
         self.state = np.zeros((3,1))
-        
+
         # Wheel parameters
         self.wheels_width = wheels_width  # The distance between the left and right wheels
         self.wheels_scale = wheels_scale  # The scaling factor converting ticks/s to m/s

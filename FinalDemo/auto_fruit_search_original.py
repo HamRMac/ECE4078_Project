@@ -225,16 +225,12 @@ def get_robot_pose(penguin_pi, aruco_detector, ekf):
     dt = max(1e-3, now - get_robot_pose._last_t)
     get_robot_pose._last_t = now
 
-    # Use last commanded wheel velocities from PenguinPi
+    # Prefer measured wheel velocities from encoders (fallback to commands)
     try:
-        l_vel, r_vel = penguin_pi.wheel_vel
+        l_vel, r_vel = penguin_pi.get_wheel_velocity(prefer_measured=True)
     except Exception:
         l_vel, r_vel = 0.0, 0.0
-    # Match M2 convention: invert right wheel for physical robot
-    if getattr(penguin_pi, 'ip', '') == 'localhost':
-        drive_meas = measure.Drive(l_vel, r_vel, dt)
-    else:
-        drive_meas = measure.Drive(l_vel, -r_vel, dt)
+    drive_meas = measure.Drive(l_vel, r_vel, dt)
     ekf.predict(drive_meas)
     # Get any visible arucos and then update EKF
     lms, _ = aruco_detector.detect_marker_positions(img)
@@ -283,6 +279,7 @@ def init_ekf(datadir, ip):
     fileB = "{}baseline.txt".format(datadir)
     baseline = np.loadtxt(fileB, delimiter=',')
     robot = Robot(baseline, scale, camera_matrix, dist_coeffs)
+    robot.wheel_speed_scale_is_ticks = False
     return EKF(robot)
 
 
@@ -547,7 +544,19 @@ def _configure_logging(level: str):
 
 def _init_penguinpi(args):
     log.info("Connecting to PenguinPi (ip=%s, port=%s)", args.ip, args.port)
-    return PenguinPi(args.ip, args.port)
+    pibot = PenguinPi(args.ip, args.port)
+    try:
+        scale_path = os.path.join(args.calib_dir, "scale.txt")
+        scale_val = float(np.loadtxt(scale_path, delimiter=','))
+        pibot.set_distance_scale(scale_val)
+    except Exception as e:
+        log.warning("PenguinPi: using default scale (failed to load calibration: %s)", e)
+    if args.ip != 'localhost':
+        try:
+            pibot.start_encoder_monitor(rate_hz=10.0)
+        except Exception as e:
+            log.warning("Encoder polling disabled (%s)", e)
+    return pibot
 
 
 def _load_map_and_shopping(args):

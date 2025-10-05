@@ -47,6 +47,9 @@ class PiBotActions:
         self.current_obj_positions: List[Dict[str, Any]] = []  # clustered objects
         # -----------------------------------------
 
+    def stop_robot(self):
+        self.ppi.set_velocity([0,0])
+
     def _turn_time_for_angle(self, angle_deg: float, turning_tick: int) -> float:
         """Compute time (s) to rotate in place by angle_deg at given turning_tick.
 
@@ -69,20 +72,18 @@ class PiBotActions:
         def wrap_pi(a: float) -> float:
             return (a + math.pi) % (2.0 * math.pi) - math.pi
 
+        if not callable(get_pose_fn):
+            log.error("get_pose_fn is not defined or callable")
+
         min_tick = 10
         max_tick = int(max(10, turning_tick))
         ang_tol = math.radians(2.0)
         dt_cmd = 0.05
-        safety_timeout = 6.0
+        safety_timeout = 20
         t0 = time.time()
-        last_tick = max_tick
+        last_tick = -1000
         while True:
-            pose_now = None
-            if callable(get_pose_fn):
-                try:
-                    pose_now = get_pose_fn()
-                except Exception:
-                    pose_now = [0.0, 0.0, 0.0]
+            pose_now = get_pose_fn()
             th_now = float(pose_now[2] if pose_now is not None else 0.0)
             err = wrap_pi(float(goal_heading_rad) - th_now)
             log.debug(f"scan: angle: {th_now} with goal {goal_heading_rad} --> err = {err}")
@@ -91,16 +92,20 @@ class PiBotActions:
             turn_dir = 1 if err > 0 else -1
             gain = min(1.0, max(0.1, abs(err) / math.pi))
             tick_cmd = int(max(min_tick, min(max_tick, gain * max_tick)))
+            tick_changed_much = (abs(last_tick-tick_cmd) > 5) or ((tick_cmd == min_tick) and (last_tick != min_tick))
+            log.debug(f"tick_changed_much = {tick_changed_much} ({tick_cmd} vs {last_tick})")
             last_tick = tick_cmd
             try:
-                self.ppi.set_velocity([0, turn_dir], turning_tick=tick_cmd, time=0)
+                if (tick_changed_much):
+                    self.ppi.set_velocity([0, turn_dir], turning_tick=tick_cmd, time=0)
             except Exception as e:
                 log.warning("scan: set_velocity failed during turn_to_heading: %s", e)
                 break
-            time.sleep(dt_cmd)
+            # time.sleep(dt_cmd)
             if (time.time() - t0) > safety_timeout:
                 log.warning("scan: heading step timeout (err=%.3f rad)", err)
                 break
+        
         return last_tick
 
     def scan(self,
