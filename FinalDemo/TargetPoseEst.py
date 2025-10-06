@@ -369,7 +369,8 @@ def merge_estimations(target_pose_dict, eps=0.15, min_samples=2):
         pts_arr = np.array(pts, dtype=float)
         if pts_arr.shape[0] == 0:
             continue
-
+        
+        print(f'Clustering class {label}: pts_arr.shape={pts_arr.shape} pts={pts_arr}')
         # DBSCAN parameters: eps in metres, min_samples=1 to ensure singletons form their own cluster
         clustering = DBSCAN(eps=eps, min_samples=min_samples).fit(pts_arr)
         labels = clustering.labels_
