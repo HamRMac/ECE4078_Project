@@ -89,10 +89,11 @@ class Operate:
         self.output = dh.OutputWriter('lab_output')
 
         # Create a fruit ranger instance
-        self.fruit_ranger = FruitRanger(pixel_centroid_sigma_px=2.0,
-                                        pixel_height_sigma_px=3.0,
-                                        range_scale_beta=0.02,
-                                        ekf_weight_gamma=1.0)
+        self.fruit_ranger = FruitRanger(camera_matrix=self.ekf.robot.camera_matrix,
+                                         pixel_centroid_sigma_px=2.0,
+                                         pixel_height_sigma_px=3.0,
+                                         range_scale_beta=0.02,
+                                         ekf_weight_gamma=1.0)
 
         # Commands / state flags
         self.command = {'motion': [0, 0],
@@ -315,7 +316,7 @@ class Operate:
             self.notification = f'{f_} is saved'
 
     # wheel and camera calibration for SLAM
-    def init_ekf(self, datadir, ip):
+    def init_ekf(self, datadir, ip) -> EKF:
         fileK = "{}intrinsic.txt".format(datadir)
         camera_matrix = np.loadtxt(fileK, delimiter=',')
         fileD = "{}distCoeffs.txt".format(datadir)
