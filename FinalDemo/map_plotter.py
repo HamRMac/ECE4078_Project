@@ -2,7 +2,7 @@ import json
 import matplotlib.pyplot as plt
 
 # Load map from file
-with open("lib_map1.txt", "r") as f:
+with open("true_map.txt", "r") as f:
     map_data = json.load(f)
 
 # Separate markers and fruits
