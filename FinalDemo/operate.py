@@ -284,6 +284,7 @@ class Operate:
                 # Estimate range/bearing
                 true_height = TARGET_HEIGHTS_DICT[target_class]
                 est = self.fruit_ranger.from_bbox_height(bbox, true_height)
+                print(f"{time.monotonic()}:\n Detection: {target_class} @({bbox}) -> {est['r']:.2f}m, {np.rad2deg(est['theta']):.1f}°" if est is not None else " -> Estimation failed")
                 if est is None:
                     continue
                 
@@ -292,6 +293,8 @@ class Operate:
                 rx, ry, rth = float(pose_now[0]), float(pose_now[1]), float(pose_now[2])
                 wx = rx + r * math.cos(rth + th)
                 wy = ry + r * math.sin(rth + th)
+
+                print(f"   -> Global pos: ({wx:.2f}, {wy:.2f})")
 
                 # Add current object to dictionary
                 if target_class not in self.current_objects:
