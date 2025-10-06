@@ -116,9 +116,10 @@ class Operate:
 
         # Dictionary to hold currently-detected objects (for display in SLAM)
         self.current_objects = {}
+        self.captured_objects = {}
 
-        # Timer (5 min)
-        self.count_down = 300
+        # Timer (15 min)
+        self.count_down = 900
         self.start_time = time.time()
         self.control_clock = time.time()
 
@@ -281,11 +282,11 @@ class Operate:
                 # Aspect-ratio sanity filter (±15%)
                 #if not bbox_ratio_ok(target_class, bbox, TARGET_HEIGHTS_DICT, tol=0.15):
                 #    continue
-                print(f"{time.monotonic()}:\n Detection: {target_class} @({bbox})")
+                #print(f"{time.monotonic()}:\n Detection: {target_class} @({bbox})")
                 # Estimate range/bearing
                 true_height = TARGET_HEIGHTS_DICT[target_class]
                 est = self.fruit_ranger.from_bbox_height(bbox, true_height)
-                print(f"  -> {est['r']:.2f}m, {np.rad2deg(est['theta']):.1f}°" if est is not None else "  -> Estimation failed")
+                #print(f"  -> {est['r']:.2f}m, {np.rad2deg(est['theta']):.1f}°" if est is not None else "  -> Estimation failed")
                 if est is None:
                     continue
                 
@@ -295,12 +296,13 @@ class Operate:
                 wx = rx + r * math.cos(rth + th)
                 wy = ry + r * math.sin(rth + th)
 
-                print(f"  -> Global pos: ({wx:.2f}, {wy:.2f})")
+                #print(f"  -> Global pos: ({wx:.2f}, {wy:.2f})")
 
                 # Add current object to dictionary
                 if target_class not in self.current_objects:
-                    self.current_objects[target_class] = []
-                self.current_objects[target_class].append((wx, wy))
+                    self.current_objects[target_class] = [(wx, wy)]
+                else:
+                    self.current_objects[target_class].append((wx, wy))
 
             # self.notification = f'{len(self.detector_output)} target type(s) detected'
 
@@ -342,6 +344,13 @@ class Operate:
         if self.command['save_inference']:
             if self.file_output is not None:
                     self.pred_fname = self.output.write_image(self.file_output[0], self.file_output[1]) 
+                    # Append the current objects to captured objects
+                    if self.current_objects:
+                            for k, v in self.current_objects.items():
+                                if k not in self.captured_objects:
+                                    self.captured_objects[k] = v
+                                else:
+                                    self.captured_objects[k].extend(v)
                     if not self.saved_inference:
                         self.notification = f'New Prediction saved -> {self.pred_fname}'
                     else:
@@ -365,7 +374,8 @@ class Operate:
                                             grid_spacing_m=0.9,
                                             subgrid_spacing_m=0.3,
                                             grid_at_origin=False,
-                                            current_objects=self.current_objects # For testing
+                                            current_objects=self.current_objects,
+                                            captured_objects=self.captured_objects,
                                             )
         canvas.blit(ekf_view, (2*h_pad+320, v_pad))
         robot_view = cv2.resize(self.aruco_img, (320, 240))

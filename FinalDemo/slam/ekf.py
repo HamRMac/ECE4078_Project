@@ -6,6 +6,8 @@ import pygame
 from robot import Robot
 import logging
 
+from util.StandardValues import OBJECT_COLOURS
+
 log = logging.getLogger(__name__)
 
 class EKF:
@@ -376,6 +378,7 @@ class EKF:
                     draw_subgrid=False, subgrid_spacing_m=0.25, subgrid_alpha=0.3,
                     grid_at_origin: bool = False,
                     current_objects: dict[str, list[list[float]]] = None,
+                    captured_objects: dict[str, list[list[float]]] = None
                     ):
         """
         Draw the SLAM state visualization.
@@ -505,30 +508,27 @@ class EKF:
         y_tip = self.to_im_coor((0.0, arrow_len_m), res, m2pixel)
         pygame.draw.line(surface, (0, 200, 0), origin_uv, y_tip, 3)
 
+        # Draw old-detected objects
+        if captured_objects is not None:
+            # Get each class
+            for det_class in captured_objects:
+                color = OBJECT_COLOURS.get(det_class, (128, 128, 128))
+
+                # Draw a circle at the detected object's world position
+                for obj in captured_objects[det_class]:
+                    # Convert to robot-centric coordinates for display
+                    obj = np.array(obj) - rob_pos
+                    # Deconstruct object into x y pos (object = [x,y])
+                    x, y = obj
+                    obj_uv = self.to_im_coor((x, y), res, m2pixel)
+                    # Draw a faded filled circle with radius 4 pixels
+                    pygame.draw.circle(surface, (*color, 128), obj_uv, 4)
 
         # Draw currently-detected objects (e.g., from the detector)
         if current_objects is not None:
             # Get each class
             for det_class in current_objects:
-                # Get the class colour
-                if det_class == 'orange':
-                    color = (255, 165, 0)
-                elif det_class == 'lemon':
-                    color = (255, 255, 0)
-                elif det_class == 'pear':
-                    color = (0, 255, 0)
-                elif det_class == 'tomato':
-                    color = (255, 0, 0)
-                elif det_class == 'capsicum':
-                    color = (0, 255, 255)
-                elif det_class == 'potato':
-                    color = (139, 69, 19)
-                elif det_class == 'pumpkin':
-                    color = (255, 140, 0)
-                elif det_class == 'garlic':
-                    color = (255, 255, 255)
-                else:
-                    color = (128, 128, 128)  # Unknown class
+                color = OBJECT_COLOURS.get(det_class, (128, 128, 128))
 
                 # Draw a circle at the detected object's world position
                 for obj in current_objects[det_class]:
@@ -537,8 +537,8 @@ class EKF:
                     # Deconstruct object into x y pos (object = [x,y])
                     x, y = obj
                     obj_uv = self.to_im_coor((x, y), res, m2pixel)
-                    # Draw a filled circle with radius 10 pixels
-                    pygame.draw.circle(surface, color, obj_uv, 5)
+                    # Draw a filled circle with radius 7 pixels
+                    pygame.draw.circle(surface, color, obj_uv, 7)
 
         return surface
 

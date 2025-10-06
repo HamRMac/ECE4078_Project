@@ -14,3 +14,14 @@ TARGET_HEIGHTS_DICT: Dict[str, float] = {
 }
 
 TARGET_TYPES = [f for f in TARGET_HEIGHTS_DICT.keys()]
+
+OBJECT_COLOURS = {
+    'orange': (255, 165, 0),
+    'lemon': (255, 255, 0),
+    'pear': (0, 255, 0),
+    'tomato': (255, 0, 0),
+    'capsicum': (0, 255, 255),
+    'potato': (139, 69, 19),
+    'pumpkin': (255, 140, 0),
+    'garlic': (255, 255, 255)
+}
