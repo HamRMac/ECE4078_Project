@@ -278,8 +278,8 @@ class Operate:
                     continue
 
                 # Aspect-ratio sanity filter (±15%)
-                if not bbox_ratio_ok(target_class, bbox, TARGET_HEIGHTS_DICT, tol=0.15):
-                    continue
+                #if not bbox_ratio_ok(target_class, bbox, TARGET_HEIGHTS_DICT, tol=0.15):
+                #    continue
 
                 # Estimate range/bearing
                 true_height = TARGET_HEIGHTS_DICT[target_class]
