@@ -20,6 +20,7 @@ Keys:
 import os, sys, time
 import cv2
 import numpy as np
+import math
 
 # import utility functions
 sys.path.insert(0, "{}/util".format(os.getcwd()))
@@ -37,6 +38,13 @@ from slam.ekf import EKF
 from slam.robot import Robot
 import slam.aruco_detector as aruco
 from slam.joint_optimiser import JointOptimiser2D
+
+from perception.fruit_ranger import (
+    FruitRanger,
+    bbox_ratio_ok,
+)
+
+from util.StandardValues import TARGET_HEIGHTS_DICT, TARGET_TYPES
 
 # import YOLO components 
 from YOLO.detector import Detector
@@ -80,6 +88,12 @@ class Operate:
             self.data = None
         self.output = dh.OutputWriter('lab_output')
 
+        # Create a fruit ranger instance
+        self.fruit_ranger = FruitRanger(pixel_centroid_sigma_px=2.0,
+                                        pixel_height_sigma_px=3.0,
+                                        range_scale_beta=0.02,
+                                        ekf_weight_gamma=1.0)
+
         # Commands / state flags
         self.command = {'motion': [0, 0],
                         'inference': False,
@@ -98,6 +112,9 @@ class Operate:
         self.map_id = 0
         self.notification = 'Press ENTER to start SLAM'
         self.pred_notifier = False
+
+        # Dictionary to hold currently-detected objects (for display in SLAM)
+        self.current_objects = {}
 
         # Timer (5 min)
         self.count_down = 300
@@ -236,6 +253,8 @@ class Operate:
             # need to convert the colour before passing to YOLO
             yolo_input_img = cv2.cvtColor(self.img, cv2.COLOR_RGB2BGR)
 
+            pose_now = self.ekf.robot.state.flatten().tolist()
+
             self.detector_output, self.yolo_vis = self.detector.detect_single_image(yolo_input_img)
             self._last_detect_ts = now
 
@@ -245,6 +264,39 @@ class Operate:
             # self.command['inference'] = False     # uncomment this if you do not want to continuously predict
             self.file_output = (yolo_input_img, self.ekf)
             self.saved_inference = False
+
+            # Reset current objects
+            self.current_objects = {}
+            
+            # Process detection results
+            for detection in self.detector_output: # Grab each bbox
+                target_class = detection[0]
+                bbox = detection[1]  # [x, y, w, h] in px (top-left origin for your detector)
+
+                # Accept only known classes
+                if target_class not in TARGET_HEIGHTS_DICT:
+                    continue
+
+                # Aspect-ratio sanity filter (±15%)
+                if not bbox_ratio_ok(target_class, bbox, TARGET_HEIGHTS_DICT, tol=0.15):
+                    continue
+
+                # Estimate range/bearing
+                true_height = TARGET_HEIGHTS_DICT[target_class]
+                est = self.fruit_ranger.from_bbox_height(bbox, true_height)
+                if est is None:
+                    continue
+                
+                # Calculate global position of the target
+                r = float(est['r']); th = float(est['theta'])
+                rx, ry, rth = float(pose_now[0]), float(pose_now[1]), float(pose_now[2])
+                wx = rx + r * math.cos(rth + th)
+                wy = ry + r * math.sin(rth + th)
+
+                # Add current object to dictionary
+                if target_class not in self.current_objects:
+                    self.current_objects[target_class] = []
+                self.current_objects[target_class].append((wx, wy))
 
             # self.notification = f'{len(self.detector_output)} target type(s) detected'
 
@@ -308,7 +360,9 @@ class Operate:
                                             draw_subgrid=True,
                                             grid_spacing_m=0.9,
                                             subgrid_spacing_m=0.3,
-                                            grid_at_origin=False)
+                                            grid_at_origin=False,
+                                            current_objects=self.current_objects # For testing
+                                            )
         canvas.blit(ekf_view, (2*h_pad+320, v_pad))
         robot_view = cv2.resize(self.aruco_img, (320, 240))
         self.draw_pygame_window(canvas, robot_view, position=(h_pad, v_pad))
