@@ -160,6 +160,7 @@ class EKF:
                 theta = math.atan2(R[1][0], R[0][0])
                 self.robot.state[:2]=t[:2]
                 self.robot.state[2]=theta
+                self.robot.state[2] = (self.robot.state[2] + np.pi) % (2*np.pi) - np.pi
                 log.info("EKF recovered pose from %d landmarks", int(lm_new.shape[1]))
                 return True
             else:
@@ -464,7 +465,7 @@ class EKF:
         surface = pygame.transform.flip(surface, True, False)
 
         # robot sprite
-        surface.blit(self.rot_center(self.pibot_pic, robot_theta*57.3),
+        surface.blit(self.rot_center(self.pibot_pic, np.rad2deg(robot_theta)),
                     (start_point_uv[0]-15, start_point_uv[1]-15))
 
         # landmark sprites
