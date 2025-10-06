@@ -29,6 +29,9 @@ class PenguinPi:
         self._wheel_vel_meas = np.zeros(2, dtype=float)
         self._wheel_vel_meas_time: Optional[float] = None
 
+        self._wheel_vel_time_last_call = None
+        self._wheel_vel_meas_last_call = None
+
         # Latest encoder counts (body frame tick counts) and timestamp
         self._encoder_counts = None
         self._encoder_timestamp = None
@@ -38,6 +41,8 @@ class PenguinPi:
         self._encoder_thread: Optional[threading.Thread] = None
         self._encoder_stop = threading.Event()
         self._encoder_rate_hz = 0.0
+
+        self._encoder_session = requests.Session()
 
         # Legacy attribute (kept for compatibility)
         self.wheel_vel = [0.0, 0.0]
@@ -176,6 +181,32 @@ class PenguinPi:
                     return float(self._wheel_vel_meas[0]), float(self._wheel_vel_meas[1])
         # Fall back to commanded velocities
         return float(self._wheel_vel_cmd[0]), float(self._wheel_vel_cmd[1])
+
+    def get_wheel_velocity_diff(self) -> Tuple[float, float, float]:
+        """
+        Return wheel velocities (ticks/s) in robot body frame (left, right) and dt.
+        """
+        # Request counts
+        counts, stamp = self._fetch_encoder(self._encoder_session)
+        
+        # Block first call if we are starting from 0
+        if self._wheel_vel_time_last_call is None or self._wheel_vel_meas_last_call is None:
+            self._wheel_vel_time_last_call = stamp
+            self._wheel_vel_meas_last_call = counts
+            return float(0), float(0), 0.1
+
+        # Compute time difference
+        dt = stamp - self._wheel_vel_time_last_call
+        
+        # Velocity is equal to new counts - last vel over time diff scaled by 1/10
+        vel = ((counts - self._wheel_vel_meas_last_call) / dt) / 10
+        
+        # Save previous values
+        self._wheel_vel_time_last_call = stamp
+        self._wheel_vel_meas_last_call = counts
+
+        # Return velocity
+        return float(vel[0]), float(vel[1]), dt
 
     def _encoder_poll_loop(self, rate_hz: float) -> None:
         period = 1.0 / max(1e-3, rate_hz)

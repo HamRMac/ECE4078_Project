@@ -29,6 +29,8 @@ import util.measure as measure      # measurements
 import pygame                       # python package for GUI
 import shutil                       # python package for file operations
 
+import logging
+
 # import SLAM components you developed in M2
 sys.path.insert(0, "{}/slam".format(os.getcwd()))
 from slam.ekf import EKF
@@ -39,6 +41,7 @@ from slam.joint_optimiser import JointOptimiser2D
 # import YOLO components 
 from YOLO.detector import Detector
 
+log = logging.getLogger(__name__)
 
 class Operate:
     def __init__(self, args):
@@ -59,6 +62,7 @@ class Operate:
         # SLAM init
         self.ekf = self.init_ekf(args.calib_dir, args.ip)
         self.aruco_det = aruco.aruco_detector(self.ekf.robot, marker_length=0.07, cube_depth=0.08)
+        self.ekf_last_time = time.monotonic()
 
         # Joint (bundle) optimisation support
         self.joint_optimiser = JointOptimiser2D()
@@ -147,7 +151,7 @@ class Operate:
             self.data.write_image(self.img)
 
     # SLAM with ARUCO markers       
-    def update_slam(self, drive_meas):
+    def update_slam(self,drive_meas_ctrl):
         lms, self.aruco_img = self.aruco_det.detect_marker_positions(self.img)
         if self.request_recover_robot:
             is_success = self.ekf.recover_from_pause(lms)
@@ -159,6 +163,19 @@ class Operate:
                 self.ekf_on = False
             self.request_recover_robot = False
         elif self.ekf_on:
+            '''
+            # Get time
+            time_now = time.monotonic()
+            dt = time_now - self.ekf_last_time
+            l_vel, r_vel = self.pibot.get_wheel_velocity(prefer_measured=True)
+            print(f"Time: {time_now} -> {l_vel}, {r_vel}")
+            self.ekf_last_time = time_now
+            drive_meas = measure.Drive(l_vel, r_vel, dt, left_cov=self.left_wheel_cov, right_cov=self.right_wheel_cov)
+            '''
+            l_vel, r_vel, dt = self.pibot.get_wheel_velocity_diff()
+            drive_meas = measure.Drive(l_vel, -r_vel, dt, left_cov=self.left_wheel_cov, right_cov=self.right_wheel_cov)
+            # print(f"{time.monotonic()} -> dt: {dt:.2f} w./ {l_vel:.2f}, {r_vel:.2f}")
+            
             self.ekf.predict(drive_meas)
             self.ekf.add_landmarks(lms)
             self.ekf.update(lms)

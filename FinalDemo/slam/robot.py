@@ -2,7 +2,7 @@ import numpy as np
 
 class Robot:
     def __init__(self, wheels_width, wheels_scale, camera_matrix, camera_dist):
-        print("Initialising robot.py V2.0")
+        print("Initialising robot.py V2.1")
         # State is a vector of [x,y,theta]'
         self.state = np.zeros((3,1))
 
@@ -104,6 +104,7 @@ class Robot:
         th = self.state[2]        
         Rot_theta = np.block([[np.cos(th), -np.sin(th)],[np.sin(th), np.cos(th)]])
         DRot_theta = np.block([[-np.sin(th), -np.cos(th)],[np.cos(th), -np.sin(th)]])
+        # DRot_theta = np.block([[np.sin(th), np.cos(th)],[-np.cos(th), np.sin(th)]]) # <-- Might be better?
 
         for i in range(n//2):
             j = idx_list[i]
