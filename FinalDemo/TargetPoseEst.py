@@ -371,16 +371,19 @@ def merge_estimations(target_pose_dict, eps=0.15, min_samples=2):
         if pts_arr.shape[0] == 0:
             continue
         
-        print(f'Clustering class {label}: pts_arr.shape={pts_arr.shape} pts={pts_arr}')
-        # DBSCAN parameters: eps in metres, min_samples=1 to ensure singletons form their own cluster
+        print(f'Clustering class {label}: pts_arr.shape={pts_arr.shape}')
+        # DBSCAN
         clustering = DBSCAN(eps=eps, min_samples=min_samples).fit(pts_arr)
         labels = clustering.labels_
-        print(f'  labels: {labels}')
+        #print(f'  labels: {labels}')
         unique_labels = sorted(set(labels), key=lambda l: -sum(labels == l))
 
         clusters = []
         for ul in unique_labels:
-            print(f'  grouping unique label: {ul}')
+            if ul < 0:
+                # Skip noise points
+                continue
+            # Get members of this cluster
             members = pts_arr[labels == ul]
             if members.size == 0:
                 continue
