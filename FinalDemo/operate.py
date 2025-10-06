@@ -280,11 +280,11 @@ class Operate:
                 # Aspect-ratio sanity filter (±15%)
                 #if not bbox_ratio_ok(target_class, bbox, TARGET_HEIGHTS_DICT, tol=0.15):
                 #    continue
-
+                print(f"{time.monotonic()}:\n Detection: {target_class} @({bbox})")
                 # Estimate range/bearing
                 true_height = TARGET_HEIGHTS_DICT[target_class]
                 est = self.fruit_ranger.from_bbox_height(bbox, true_height)
-                print(f"{time.monotonic()}:\n Detection: {target_class} @({bbox}) -> {est['r']:.2f}m, {np.rad2deg(est['theta']):.1f}°" if est is not None else " -> Estimation failed")
+                print(f"  -> {est['r']:.2f}m, {np.rad2deg(est['theta']):.1f}°" if est is not None else "  -> Estimation failed")
                 if est is None:
                     continue
                 
@@ -294,7 +294,7 @@ class Operate:
                 wx = rx + r * math.cos(rth + th)
                 wy = ry + r * math.sin(rth + th)
 
-                print(f"   -> Global pos: ({wx:.2f}, {wy:.2f})")
+                print(f"  -> Global pos: ({wx:.2f}, {wy:.2f})")
 
                 # Add current object to dictionary
                 if target_class not in self.current_objects:

@@ -11,6 +11,8 @@ from __future__ import annotations
 from typing import List, Dict, Tuple, Optional
 import numpy as np
 
+import logging
+log = logging.getLogger(__name__)
 
 def is_inside_arena(x: float, y: float, bound: float) -> bool:
     x = float(x); y = float(y)
@@ -69,12 +71,15 @@ class FruitRanger:
         Returns: {'r','theta','sigma_r','sigma_theta','x','y'} in camera frame.
         """
         if self.camera_matrix is None or true_height_m <= 0:
+            log.warning("from_bbox_height: Invalid camera parameters or true height.")
             return None
         try:
             x, y, w, h = [float(v) for v in bbox]
         except Exception:
+            log.warning("from_bbox_height: Failed to parse bbox")
             return None
         if h <= 0:
+            log.warning("from_bbox_height: cannot use bbox with non-positive height")
             return None
 
         f = float(self.camera_matrix[0, 0])
