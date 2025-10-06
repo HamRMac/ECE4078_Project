@@ -365,6 +365,7 @@ def merge_estimations(target_pose_dict, eps=0.15, min_samples=2):
         per_class.setdefault(label, []).append((x, y))
 
     # cluster per class using DBSCAN and keep up to 3 largest clusters
+    print(f'Clustering with eps={eps}, min_samples={min_samples}')
     for label, pts in per_class.items():
         pts_arr = np.array(pts, dtype=float)
         if pts_arr.shape[0] == 0:
@@ -374,6 +375,7 @@ def merge_estimations(target_pose_dict, eps=0.15, min_samples=2):
         # DBSCAN parameters: eps in metres, min_samples=1 to ensure singletons form their own cluster
         clustering = DBSCAN(eps=eps, min_samples=min_samples).fit(pts_arr)
         labels = clustering.labels_
+        print(f'  labels: {labels}')
         unique_labels = sorted(set(labels), key=lambda l: -sum(labels == l))
 
         clusters = []
