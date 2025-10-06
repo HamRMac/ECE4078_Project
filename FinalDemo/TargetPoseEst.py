@@ -380,6 +380,7 @@ def merge_estimations(target_pose_dict, eps=0.15, min_samples=2):
 
         clusters = []
         for ul in unique_labels:
+            print(f'  grouping unique label: {ul}')
             members = pts_arr[labels == ul]
             if members.size == 0:
                 continue
