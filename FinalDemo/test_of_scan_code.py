@@ -8,6 +8,7 @@ import time
 import logging
 import threading
 from collections import defaultdict, deque
+import matplotlib.pyplot as plt
 
 from YOLO.detector import Detector
 
@@ -241,6 +242,7 @@ get_pose = _make_pose_fn(args, penguinpiInstance, aruco_det, ekfInstance)
 last_tick = actions.turn_to_heading(goal_heading_rad=0, get_pose_fn=get_pose, turning_tick=50)
 penguinpiInstance.set_velocity([0, 0], turning_tick=last_tick, time=0)
 
+# Test tth
 actions.turn_to_heading(
     goal_heading_rad=np.deg2rad(0),
     get_pose_fn=get_pose,
@@ -248,3 +250,50 @@ actions.turn_to_heading(
     )
 penguinpiInstance.set_velocity([0, 0], tick=10, time=0)
 
+plt.ion()
+fig, ax = plt.subplots(figsize=(6, 6))
+
+def _update_pose_plot(_step_log=None):
+    try:
+        ax.clear()
+        pose_vis = get_pose()
+        markers_w = ekfInstance.markers if getattr(ekfInstance, 'markers', None) is not None else np.zeros((2, 0))
+
+        if markers_w.size > 0:
+            ax.scatter(markers_w[0, :], markers_w[1, :], c='red', label='ArUco markers')
+            for tag_id, (mx, my) in zip(getattr(ekfInstance, 'taglist', []), markers_w.T):
+                ax.text(mx, my, str(tag_id), color='red', fontsize=9, ha='left', va='bottom')
+
+        rx, ry, rth = float(pose_vis[0]), float(pose_vis[1]), float(pose_vis[2])
+        ax.scatter([rx], [ry], c='blue', marker='*', s=120, label='Robot')
+        arrow_len = 0.25
+        ax.arrow(rx, ry, arrow_len * np.cos(rth), arrow_len * np.sin(rth),
+                 head_width=0.07, head_length=0.1, fc='blue', ec='blue')
+
+        ax.set_title('ArUco Scan Result (Live)')
+        ax.set_xlabel('X (m)')
+        ax.set_ylabel('Y (m)')
+        ax.axis('equal')
+        ax.grid(True, linestyle='--', alpha=0.5)
+        ax.legend(loc='best')
+        fig.canvas.draw()
+        fig.canvas.flush_events()
+        plt.pause(0.001)
+    except Exception as plot_err:
+        log.debug("live plot update skipped: %s", plot_err)
+
+_update_pose_plot()
+
+aruco_pos_from_scan = actions.scan_for_arucos(
+    step_angle_deg=10,
+    aruco_detector=aruco_det,
+    ekf=ekfInstance,
+    get_pose_fn=get_pose,
+    turning_tick=15,
+    pause_s=0.5,
+    progress_cb=_update_pose_plot
+)
+
+plt.ioff()
+_update_pose_plot()
+plt.show()

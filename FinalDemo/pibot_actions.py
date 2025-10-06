@@ -84,7 +84,7 @@ class PiBotActions:
         last_tick = -1000
         while True:
             pose_now = get_pose_fn()
-            th_now = float(pose_now[2] if pose_now is not None else 0.0)
+            th_now = wrap_pi(float(pose_now[2] if pose_now is not None else 0.0))
             err = wrap_pi(float(goal_heading_rad) - th_now)
             log.debug(f"scan: angle: {th_now} with goal {goal_heading_rad} --> err = {err}")
             if abs(err) <= ang_tol:
@@ -93,7 +93,7 @@ class PiBotActions:
             gain = min(1.0, max(0.1, abs(err) / math.pi))
             tick_cmd = int(max(min_tick, min(max_tick, gain * max_tick)))
             tick_changed_much = (abs(last_tick-tick_cmd) > 5) or ((tick_cmd == min_tick) and (last_tick != min_tick))
-            log.debug(f"tick_changed_much = {tick_changed_much} ({tick_cmd} vs {last_tick})")
+            # log.debug(f"tick_changed_much = {tick_changed_much} ({tick_cmd} vs {last_tick})")
             last_tick = tick_cmd
             try:
                 if (tick_changed_much):
@@ -361,7 +361,125 @@ class PiBotActions:
         except Exception as e:
             log.warning("scan: clustering failed: %s", e)
             self.current_obj_positions = []
-    
+
+
+    def scan_for_arucos(self,
+                        step_angle_deg: float,
+                        aruco_detector,
+                        ekf,
+                        get_pose_fn: Callable[[], List[float]],
+                        turning_tick: int = 35,
+                        pause_s: float = 0.3,
+                        progress_cb: Optional[Callable[[Dict[str, Any]], None]] = None) -> List[Dict[str, Any]]:
+        """Rotate in place and fuse ArUco observations into the EKF incrementally.
+
+        This mirrors the fruit `scan` loop but works directly with the EKF so that
+        every detection tightens pose estimation as soon as it is seen. The method
+        returns a per-step log of observations for higher-level diagnostics.
+        """
+
+        # Basic validation to avoid silent no-ops.
+        missing = [name for name, value in {
+            "aruco_detector": aruco_detector,
+            "ekf": ekf,
+            "get_pose_fn": get_pose_fn,
+        }.items() if value is None]
+        if missing:
+            log.error("scan_for_arucos: missing required parameters %s", missing)
+            return []
+
+        # Normalise the requested step size and ensure we cover a full revolution.
+        try:
+            step = abs(float(step_angle_deg))
+        except Exception:
+            step = 45.0
+        if step < 10.0:
+            log.warning("scan_for_arucos: requested step %.1f° < 10°. Using 10°.", step)
+            step = 10.0
+        n_steps = max(1, int(math.ceil(360.0 / step)))
+        step = 360.0 / n_steps
+        log.debug("scan_for_arucos: %d steps of %.1f° (turning_tick=%d, pause=%.2fs)",
+                  n_steps, step, turning_tick, pause_s)
+
+        def wrap_pi(a: float) -> float:
+            return (a + math.pi) % (2.0 * math.pi) - math.pi
+
+        scan_log: List[Dict[str, Any]] = []
+        cum_angle = 0.0
+        total_markers = 0
+
+        def _capture_and_fuse(step_idx: int, angle_deg: float) -> None:
+            """Capture an image, detect markers, and fuse them into the EKF."""
+            nonlocal total_markers
+            try:
+                pose_now = get_pose_fn() if callable(get_pose_fn) else [0.0, 0.0, 0.0]
+            except Exception:
+                pose_now = [0.0, 0.0, 0.0]
+
+            measurements = []
+            try:
+                img_rgb = self.ppi.get_image()
+                img_bgr = img_rgb[:, :, ::-1] if (img_rgb is not None and getattr(img_rgb, 'ndim', 0) == 3) else img_rgb
+                if img_bgr is not None:
+                    measurements, _ = aruco_detector.detect(img_bgr)
+            except Exception as e:
+                log.warning("scan_for_arucos: detection failed at step %d: %s", step_idx, e)
+                measurements = []
+
+            if measurements:
+                try:
+                    ekf.add_landmarks(measurements)
+                    ekf.update(measurements)
+                    total_markers += len(measurements)
+                except Exception as e:
+                    log.warning("scan_for_arucos: EKF fusion failed at step %d: %s", step_idx, e)
+
+            step_log = {
+                'step_index': step_idx,
+                'angle_deg': float(angle_deg),
+                'pose': [float(pose_now[0]), float(pose_now[1]), float(pose_now[2])] if pose_now is not None else [0.0, 0.0, 0.0],
+                'markers': [{'tag': int(m.tag),
+                             'position_body': [float(m.position[0, 0]), float(m.position[1, 0])]} for m in (measurements or [])]
+            }
+            scan_log.append(step_log)
+            if callable(progress_cb):
+                try:
+                    progress_cb(step_log)
+                except Exception as cb_err:
+                    log.debug("scan_for_arucos: progress callback failed: %s", cb_err)
+
+        # Snapshot the initial view before any rotation; we are guaranteed to see at least one marker.
+        _capture_and_fuse(step_idx=-1, angle_deg=cum_angle)
+
+        for idx in range(n_steps):
+            # Closed-loop turn to the next heading.
+            try:
+                pose_now = get_pose_fn() if callable(get_pose_fn) else [0.0, 0.0, 0.0]
+            except Exception:
+                pose_now = [0.0, 0.0, 0.0]
+            curr_th = float(pose_now[2] if pose_now is not None else 0.0)
+            goal_th = wrap_pi(curr_th + math.radians(step))
+            last_tick = self.turn_to_heading(goal_th, get_pose_fn, turning_tick)
+
+            # Give the robot a moment to settle before sensing.
+            try:
+                self.ppi.set_velocity([0, 0], turning_tick=last_tick, time=0)
+            except Exception:
+                pass
+            time.sleep(max(0.0, float(pause_s)))
+            _capture_and_fuse(step_idx=idx, angle_deg=float(cum_angle + step))
+            cum_angle += step
+
+        # Ensure the robot is stationary before returning.
+        try:
+            self.ppi.set_velocity([0, 0])
+        except Exception:
+            pass
+
+        self.scan_arucos_log = scan_log
+        log.info("scan_for_arucos: completed %d steps, fused %d marker observations", n_steps, total_markers)
+        return scan_log
+
     def approach_fruit(self,
                         angle_deg: float,
                         distance_m: float,

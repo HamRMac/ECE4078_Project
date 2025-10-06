@@ -76,10 +76,10 @@ class Robot:
         # Get the required information (states, dt)
         v, w = self.convert_wheel_speeds(drive_meas.left_speed, drive_meas.right_speed)
         dt = drive_meas.dt
-        th = float(self.state[2])
+        th = self.state[2]
 
         # Compute the relevant jacobian depending on if we are turning or not
-        if w < 1e-9:
+        if abs(w) < 1e-9:
             # Simple non turning model
             # x' = x + v cosθ dt ; y' = y + v sinθ dt ; θ' = θ
             DFx[0,2] = -v * np.sin(th) * dt
@@ -137,7 +137,7 @@ class Robot:
         
         v, w = self.convert_wheel_speeds(drive_meas.left_speed, drive_meas.right_speed)
         dt = drive_meas.dt
-        th = float(self.state[2])
+        th = self.state[2]
         th2 = th + w*dt             # Next theta
 
         # Derivative of x,y,theta w.r.t. lin_vel, ang_vel
