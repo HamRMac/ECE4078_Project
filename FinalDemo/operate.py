@@ -195,9 +195,9 @@ class Operate:
             drive_meas = measure.Drive(l_vel, -r_vel, dt, left_cov=self.left_wheel_cov, right_cov=self.right_wheel_cov)
             # print(f"{time.monotonic()} -> dt: {dt:.2f} w./ {l_vel:.2f}, {r_vel:.2f}")
             
-            self.ekf.predict(drive_meas)
+            motion_type = self.ekf.predict(drive_meas)
             self.ekf.add_landmarks(lms)
-            self.ekf.update(lms)
+            self.ekf.update(lms, motion_type=motion_type)
             # Joint optimisation data collection
             self._collect_joint_opt_frame(lms)
             # Auto optimisation

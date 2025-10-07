@@ -231,10 +231,10 @@ def get_robot_pose(penguin_pi, aruco_detector, ekf):
     except Exception:
         l_vel, r_vel = 0.0, 0.0
     drive_meas = measure.Drive(l_vel, r_vel, dt)
-    ekf.predict(drive_meas)
+    motion_type = ekf.predict(drive_meas)
     # Get any visible arucos and then update EKF
     lms, _ = aruco_detector.detect_marker_positions(img)
-    ekf.update(lms)
+    ekf.update(lms, motion_type=motion_type)
 
     # Read pose from EKF robot state
     try:

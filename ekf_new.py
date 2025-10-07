@@ -178,20 +178,20 @@ class EKF:
         v, w = self.robot.convert_wheel_speeds(raw_drive_meas.left_speed, raw_drive_meas.right_speed)
         eps = 1e-3
         if abs(v) < eps and abs(w) > eps:
-            mode = "Pure Rotation"
+            mot_type = 1
             print("Pure Rotation")
             Q = self.predict_covariance(raw_drive_meas)
             # x and y can't change much when rotating
             Q[0,0] = 0  # x position uncertainty
             Q[1,1] = 0  # y position uncertainty
         elif abs(v) > eps and abs(w) < eps:
-            mode = "Pure Translation"
+            mot_type = 2
             print("Pure Translation")
             Q = self.predict_covariance(raw_drive_meas)
             Q[2,2] *= 0.01  # heading uncertainty
             # theta can't change much when translating
         else:
-            mode = "Stationary"
+            mot_type = 3
             print("Stationary or Arcing")
             # The robot must not drive in an arc as it will treat this as stationary at present.
             Q = self.predict_covariance(raw_drive_meas)
@@ -214,9 +214,10 @@ class EKF:
         
         # Enforce symmetry to correct for roundoff errors
         self.P = 0.5*(self.P + self.P.T)
+        return mot_type
 
     # The update step of EKF
-    def update(self, measurements):
+    def update(self, measurements, motion_type=None):
         print(time.time())
 
         if not measurements:
@@ -277,6 +278,9 @@ class EKF:
         y = z - self.robot.measure(self.markers, idxs).reshape((-1,1), order='F')
         S = H @ self.P @ H.T + Rm
         K = self.P @ H.T @ np.linalg.inv(S)
+        if motion_type != 3:
+            K *= 0.5
+            print("Reduced Kalman Gain")
         x_new = x + K @ y
         I = np.eye(self.P.shape[0])
         self.P = (I - K @ H) @ self.P @ (I - K @ H).T + K @ Rm @ K.T
