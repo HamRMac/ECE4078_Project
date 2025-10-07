@@ -2,11 +2,10 @@ import numpy as np
 from mapping_utils import MappingUtils
 import cv2
 import math
+import time
 import pygame
 from robot import Robot
 import logging
-
-from util.StandardValues import OBJECT_COLOURS
 
 log = logging.getLogger(__name__)
 
@@ -162,7 +161,6 @@ class EKF:
                 theta = math.atan2(R[1][0], R[0][0])
                 self.robot.state[:2]=t[:2]
                 self.robot.state[2]=theta
-                self.robot.state[2] = (self.robot.state[2] + np.pi) % (2*np.pi) - np.pi
                 log.info("EKF recovered pose from %d landmarks", int(lm_new.shape[1]))
                 return True
             else:
@@ -178,16 +176,15 @@ class EKF:
         # Retrieve the required matricies
 
         v, w = self.robot.convert_wheel_speeds(raw_drive_meas.left_speed, raw_drive_meas.right_speed)
-        eps_v = 0.05
-        eps_w = 0.1
-        if abs(v) < eps_v and abs(w) > eps_w:
+        eps = 1e-3
+        if abs(v) < eps and abs(w) > eps:
             mot_type = 1
             print("Pure Rotation")
             Q = self.predict_covariance(raw_drive_meas)
             # x and y can't change much when rotating
             Q[0,0] = 0  # x position uncertainty
             Q[1,1] = 0  # y position uncertainty
-        elif abs(v) > eps_v and abs(w) < eps_w:
+        elif abs(v) > eps and abs(w) < eps:
             mot_type = 2
             print("Pure Translation")
             Q = self.predict_covariance(raw_drive_meas)
@@ -196,7 +193,6 @@ class EKF:
         else:
             mot_type = 3
             print("Stationary or Arcing")
-            print("v" + str(v) + " w" + str(w))
             # The robot must not drive in an arc as it will treat this as stationary at present.
             Q = self.predict_covariance(raw_drive_meas)
             Q[0:3,0:3] = 0
@@ -215,14 +211,14 @@ class EKF:
 
         # Propagate the covariance
         self.P = F @ self.P @ F.T + Q # < The Q here is uncertainty
-
+        
         # Enforce symmetry to correct for roundoff errors
         self.P = 0.5*(self.P + self.P.T)
         return mot_type
 
     # The update step of EKF
     def update(self, measurements, motion_type=None):
-
+        print(time.time())
 
         if not measurements:
             return
@@ -409,10 +405,7 @@ class EKF:
     def draw_slam_state(self, res=(320, 500), not_pause=True,
                     draw_grid=True, grid_spacing_m=1.0,
                     draw_subgrid=False, subgrid_spacing_m=0.25, subgrid_alpha=0.3,
-                    grid_at_origin: bool = False,
-                    current_objects: dict[str, list[list[float]]] = None,
-                    captured_objects: dict[str, list[list[float]]] = None
-                    ):
+                    grid_at_origin: bool = False):
         """
         Draw the SLAM state visualization.
         If grid_at_origin is True, the grid is centered at the world origin (0,0).
@@ -475,8 +468,6 @@ class EKF:
         # --- Pose/landmarks in robot-centric frame ---
         lms_xy = self.markers[:2, :]
         robot_xy = self.robot.state[:2, 0].reshape((2, 1))
-        rob_pos = robot_xy.flatten()
-        
         lms_xy = lms_xy - robot_xy
         robot_xy = robot_xy * 0
         robot_theta = self.robot.state[2, 0]
@@ -505,7 +496,7 @@ class EKF:
         surface = pygame.transform.flip(surface, True, False)
 
         # robot sprite
-        surface.blit(self.rot_center(self.pibot_pic, np.rad2deg(robot_theta)),
+        surface.blit(self.rot_center(self.pibot_pic, robot_theta*57.3),
                     (start_point_uv[0]-15, start_point_uv[1]-15))
 
         # landmark sprites
@@ -540,38 +531,6 @@ class EKF:
         # green +y arrow (world +Y)
         y_tip = self.to_im_coor((0.0, arrow_len_m), res, m2pixel)
         pygame.draw.line(surface, (0, 200, 0), origin_uv, y_tip, 3)
-
-        # Draw old-detected objects
-        if captured_objects is not None:
-            # Get each class
-            for det_class in captured_objects:
-                color = OBJECT_COLOURS.get(det_class, (128, 128, 128))
-
-                # Draw a circle at the detected object's world position
-                for obj in captured_objects[det_class]:
-                    # Convert to robot-centric coordinates for display
-                    obj = np.array(obj) - rob_pos
-                    # Deconstruct object into x y pos (object = [x,y])
-                    x, y = obj
-                    obj_uv = self.to_im_coor((x, y), res, m2pixel)
-                    # Draw a faded filled circle with radius 4 pixels
-                    pygame.draw.circle(surface, (*color, 128), obj_uv, 4)
-
-        # Draw currently-detected objects (e.g., from the detector)
-        if current_objects is not None:
-            # Get each class
-            for det_class in current_objects:
-                color = OBJECT_COLOURS.get(det_class, (128, 128, 128))
-
-                # Draw a circle at the detected object's world position
-                for obj in current_objects[det_class]:
-                    # Convert to robot-centric coordinates for display
-                    obj = np.array(obj) - rob_pos
-                    # Deconstruct object into x y pos (object = [x,y])
-                    x, y = obj
-                    obj_uv = self.to_im_coor((x, y), res, m2pixel)
-                    # Draw a filled circle with radius 7 pixels
-                    pygame.draw.circle(surface, color, obj_uv, 7)
 
         return surface
 

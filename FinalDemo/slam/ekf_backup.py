@@ -176,35 +176,8 @@ class EKF:
     # The prediction step of EKF
     def predict(self, raw_drive_meas):
         # Retrieve the required matricies
-
-        v, w = self.robot.convert_wheel_speeds(raw_drive_meas.left_speed, raw_drive_meas.right_speed)
-        eps_v = 0.05
-        eps_w = 0.1
-        if abs(v) < eps_v and abs(w) > eps_w:
-            mot_type = 1
-            print("Pure Rotation")
-            Q = self.predict_covariance(raw_drive_meas)
-            # x and y can't change much when rotating
-            Q[0,0] = 0  # x position uncertainty
-            Q[1,1] = 0  # y position uncertainty
-        elif abs(v) > eps_v and abs(w) < eps_w:
-            mot_type = 2
-            print("Pure Translation")
-            Q = self.predict_covariance(raw_drive_meas)
-            Q[2,2] *= 0.01  # heading uncertainty
-            # theta can't change much when translating
-        else:
-            mot_type = 3
-            print("Stationary or Arcing")
-            print("v" + str(v) + " w" + str(w))
-            # The robot must not drive in an arc as it will treat this as stationary at present.
-            Q = self.predict_covariance(raw_drive_meas)
-            Q[0:3,0:3] = 0
-            # Only small motion allowed in theta or x and y
-
-
         F = self.state_transition(raw_drive_meas)
-        #Q = self.predict_covariance(raw_drive_meas)
+        Q = self.predict_covariance(raw_drive_meas) # < To Check. Check units (should be per-timestep)
 
         # Advance robot state only (landmarks fixed)
         self.robot.drive(raw_drive_meas) # This now becomes x_{k|k-1}
@@ -215,15 +188,12 @@ class EKF:
 
         # Propagate the covariance
         self.P = F @ self.P @ F.T + Q # < The Q here is uncertainty
-
+        
         # Enforce symmetry to correct for roundoff errors
         self.P = 0.5*(self.P + self.P.T)
-        return mot_type
 
     # The update step of EKF
-    def update(self, measurements, motion_type=None):
-
-
+    def update(self, measurements):
         if not measurements:
             return
 
@@ -282,9 +252,6 @@ class EKF:
         y = z - self.robot.measure(self.markers, idxs).reshape((-1,1), order='F')
         S = H @ self.P @ H.T + Rm
         K = self.P @ H.T @ np.linalg.inv(S)
-        if motion_type != 3:
-            K *= 0.5
-            print("Reduced Kalman Gain")
         x_new = x + K @ y
         I = np.eye(self.P.shape[0])
         self.P = (I - K @ H) @ self.P @ (I - K @ H).T + K @ Rm @ K.T
