@@ -182,8 +182,8 @@ class EKF:
             print("Pure Rotation")
             Q = self.predict_covariance(raw_drive_meas)
             # x and y can't change much when rotating
-            Q[0,0] *= 0.01  # x position uncertainty
-            Q[1,1] *= 0.01  # y position uncertainty
+            Q[0,0] = 0  # x position uncertainty
+            Q[1,1] = 0  # y position uncertainty
         elif abs(v) > eps and abs(w) < eps:
             mode = "Pure Translation"
             print("Pure Translation")
@@ -195,7 +195,7 @@ class EKF:
             print("Stationary or Arcing")
             # The robot must not drive in an arc as it will treat this as stationary at present.
             Q = self.predict_covariance(raw_drive_meas)
-            Q[0:3,0:3] *= 0.01
+            Q[0:3,0:3] = 0
             # Only small motion allowed in theta or x and y
 
 
