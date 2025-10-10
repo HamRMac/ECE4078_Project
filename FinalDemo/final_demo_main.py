@@ -431,6 +431,8 @@ def _parse_args():
     parser.add_argument("--obstacle_size_large", type=float, default=0.08, help='Size of un-updated obstacles (m)')
     parser.add_argument("--obstacle_size_small", type=float, default=0.06, help='Size of updated obstacles (m)')
     parser.add_argument("--inflation_margin", type=float, default=0.05, help='Exclusion zone inflation margin (m)')
+    parser.add_argument("--reached_thresh_m", type=float, default=0.25, help='Threshold to consider a target "reached" (m)')
+    parser.add_argument("--max_approach_attempts", type=int, default=6, help='Maximum attempts to approach a target')
     # Pose smoothing (control/GUI)
     parser.add_argument("--pose_smoothing", action='store_true', help='Enable EMA + rate-limited smoothed pose for control/GUI')
     parser.add_argument("--pose_alpha_pos", type=float, default=0.2, help='EMA alpha for x/y')
@@ -717,6 +719,8 @@ def main():
         aruco_positions=aruco_true_pos,
         shopping_list=shopping_list,
         target_positions=known_targets,   # renamed from known_targets
+        reached_thresh_m=float(args.reached_thresh_m),
+        max_approach_attempts=args.max_approach_attempts,
 
         update_targets=bool(args.update_targets),
 

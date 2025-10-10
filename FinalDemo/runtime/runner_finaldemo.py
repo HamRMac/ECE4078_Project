@@ -67,6 +67,8 @@ class RunnerFinal(threading.Thread):
                  target_positions: Optional[Dict[int, Tuple[float, float]]] = None,
                  update_targets: Optional[bool] = True,
                  obstacle_sizes: Optional[Dict[str, float]] = None,
+                 reached_thresh_m: Optional[float] = 0.25,
+                 max_approach_attempts: Optional[int] = 6,
                  ):
         super().__init__(daemon=True, name="RunnerFinal")
 
@@ -98,6 +100,8 @@ class RunnerFinal(threading.Thread):
             "undetected": 0.10,  # larger
             "detected": 0.05,  # smaller
         }
+        self.reached_thresh_m = reached_thresh_m  # threshold to consider a target "reached"
+        self.max_approach_attempts = max_approach_attempts
 
         # Generated data
         self.all_obstacles_world_dict = {}
@@ -632,7 +636,7 @@ class RunnerFinal(threading.Thread):
                             self.all_obstacles_world_dict[key]["y"] = float(dpos[1])
                             self.all_obstacles_world_dict[key]["updated_by_scan"] = True
         else:
-            log.info("Skipping target/obstacle updates from detections due to config")
+            log.debug("Skipping target/obstacle updates from detections due to config")
         # 4) (Optional) publish detections to the world model for GUI
         try:
             self.world.set_detections(close_dets)
@@ -834,6 +838,10 @@ class RunnerFinal(threading.Thread):
 
             attempt = 0
             while not self._stop.is_set():
+                if attempt >= self.max_approach_attempts:
+                    log.warning("Max attempts reached for target %s", name)
+                    print(f"🎯 <-- Reached {name}")
+                    break
                 # 1) Scan
                 log.info("Starting scan before approaching %s (attempt %d)", name, attempt + 1)
                 self.world.set_status(mode='AUTO', sm_state='FinalDemo', action='scan', target=name,
@@ -853,7 +861,7 @@ class RunnerFinal(threading.Thread):
                 pose = self.get_pose_fn()
                 self.world.set_pose(pose)
                 dist = self._dist((pose[0], pose[1]), txy)
-                if dist <= 0.25:
+                if dist <= self.reached_thresh_m:
                     print(f"🎯 <-- Reached {name}")
                     time.sleep(2.0)
                     # Update targets info: mark as collected
@@ -895,7 +903,7 @@ class RunnerFinal(threading.Thread):
                     except Exception:
                         pass
                     dist = self._dist((pose[0], pose[1]), txy)
-                    if dist <= 0.25:
+                    if dist <= self.reached_thresh_m:
                         print(f"🎯 <-- Reached {name}")
                         self.cmd.stop()
                         time.sleep(2.0)
