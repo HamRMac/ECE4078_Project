@@ -617,10 +617,12 @@ class RunnerFinal(threading.Thread):
                             self.all_targets_world_dict[key]["disp_name"] = disp
                         self.all_targets_world_dict[key]["x"] = float(dpos[0])
                         self.all_targets_world_dict[key]["y"] = float(dpos[1])
+                        self.all_targets_world_dict[key]["updated_by_scan"] = True
                     else:  # obstacles
                         self.all_obstacles_world_dict[key]["disp_name"] = disp
                         self.all_obstacles_world_dict[key]["x"] = float(dpos[0])
                         self.all_obstacles_world_dict[key]["y"] = float(dpos[1])
+                        self.all_obstacles_world_dict[key]["updated_by_scan"] = True
 
         # 4) (Optional) publish detections to the world model for GUI
         try:
@@ -914,6 +916,28 @@ class RunnerFinal(threading.Thread):
         self.cmd.stop()
 
     def update_dynamic_layer_with_targets(self):
-        positions = [self.target_positions[key]["pos"] for key in self.target_positions]
-        radii = [0.25 if self.target_positions[key]["class"] is None else 0.08 for key in self.target_positions]
+        # Radii policy: larger for stale (not updated in this scan), smaller for fresh (updated now)
+        STALE_RADIUS_M  = 0.10  # larger
+        FRESH_RADIUS_M  = 0.05  # smaller
+
+        targets = getattr(self, 'all_targets_world_dict', {}) or {}
+        obstacles = getattr(self, 'all_obstacles_world_dict', {}) or {}
+
+        objects = list(targets.values()) + list(obstacles.values())
+
+        # Build positions and radii, defaulting updated_by_scan to False when missing
+        positions = []
+        radii = []
+        for obj in objects:
+            try:
+                x = float(obj["x"])
+                y = float(obj["y"])
+            except Exception:
+                continue  # skip malformed entries
+            positions.append((x, y))
+            is_fresh = bool(obj.get("updated_by_scan", False))
+            radii.append(FRESH_RADIUS_M if is_fresh else STALE_RADIUS_M)
+
+        # Push to the grid (safe to call with empty lists)
         self.grid.set_dynamic_fruits_sizes(positions=positions, fruit_radii_m=radii)
+

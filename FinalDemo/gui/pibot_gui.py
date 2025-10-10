@@ -429,7 +429,7 @@ class PiBotGUI:
                     if id in collected:
                         color = (220, 0, 0)  # blue in BGR
                     elif id == active:
-                        color = (0, 220, 0)  # blue in BGR
+                        color = (0, 120, 0)  # blue in BGR
                     else:
                         color = (0, 0, 220)
                     cv2.circle(vis_bgr, (cx, cy), 10, color, thickness=2, lineType=cv2.LINE_AA)
