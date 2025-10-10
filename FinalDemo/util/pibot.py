@@ -44,6 +44,8 @@ class PenguinPi:
 
         self._encoder_session = requests.Session()
 
+        self._vel_polling_mode = 'measured'  # 'measured' or 'commanded'
+
         # Legacy attribute (kept for compatibility)
         self.wheel_vel = [0.0, 0.0]
 
@@ -175,7 +177,7 @@ class PenguinPi:
         commanded velocity.
         """
         now = time_module.monotonic()
-        if prefer_measured:
+        if prefer_measured and self._vel_polling_mode == 'measured':
             with self._encoder_lock:
                 if self._wheel_vel_meas_time is not None and (now - self._wheel_vel_meas_time) <= max_staleness:
                     return float(self._wheel_vel_meas[0]), float(self._wheel_vel_meas[1])
@@ -222,6 +224,10 @@ class PenguinPi:
                 if not error_logged:
                     log.warning("Encoder poll failed: %s", exc)
                     error_logged = True
+                    # Stop using measured velocity if there is an error
+                    self._vel_polling_mode = 'commanded'
+                    log.info("Switching to commanded velocity mode for remainder of session.")
+
                 prev_counts = None
                 prev_stamp = None
                 counts = None

@@ -126,7 +126,7 @@ def read_search_list(list_path):
 
     return search_list
 
-def get_robot_pose(penguin_pi, aruco_detector, ekf):
+def get_robot_pose(penguin_pi: PenguinPi, aruco_detector, ekf):
     # Dummy robot_pose
     robot_pose = [0.0,0.0,0.0] # will be replaced by EKF state below
 
