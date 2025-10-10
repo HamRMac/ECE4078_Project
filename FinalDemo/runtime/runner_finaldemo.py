@@ -64,7 +64,9 @@ class RunnerFinal(threading.Thread):
                  target_dims=None,
                  aruco_positions: np.ndarray = None,
                  shopping_list: Optional[List[str]] = None,
-                 target_positions: Optional[Dict[int, Tuple[float, float]]] = None
+                 target_positions: Optional[Dict[int, Tuple[float, float]]] = None,
+                 update_targets: Optional[bool] = True,
+                 obstacle_sizes: Optional[Dict[str, float]] = None,
                  ):
         super().__init__(daemon=True, name="RunnerFinal")
 
@@ -91,6 +93,11 @@ class RunnerFinal(threading.Thread):
         # This target_positions is in the order by which they will be reached
         self.target_positions: Dict[int, Dict] = target_positions or {}  # {1: {class:"",pos:(x,y)}}
         self.shopping_list: List[str] = list(shopping_list or [])
+        self.update_targets = bool(update_targets)
+        self.obstacle_sizes = obstacle_sizes if isinstance(obstacle_sizes, dict) else {
+            "undetected": 0.10,  # larger
+            "detected": 0.05,  # smaller
+        }
 
         # Generated data
         self.all_obstacles_world_dict = {}
@@ -590,7 +597,7 @@ class RunnerFinal(threading.Thread):
                 continue
 
         # 3) For each detection, identify the closest object (targets + obstacles) and update its entry
-        if (self.all_targets_world_dict or self.all_obstacles_world_dict) and close_dets:
+        if (self.all_targets_world_dict or self.all_obstacles_world_dict) and close_dets and self.update_targets:
             def _iter_entries():
                 # tag which dict each entry comes from so we can update the right one
                 for k, v in self.all_targets_world_dict.items():
@@ -696,7 +703,8 @@ class RunnerFinal(threading.Thread):
             tid: {
                 "disp_name": info.get("class").split("_")[0] if info.get("class") is not None else None,
                 "x": float(info["pos"][0]),
-                "y": float(info["pos"][1])
+                "y": float(info["pos"][1]),
+                "updated_by_scan": False if self.update_targets else True
             }
             for tid, info in self.target_positions.items()
             if tid in target_order
@@ -706,7 +714,8 @@ class RunnerFinal(threading.Thread):
             tid: {
                 "disp_name": info.get("class").split("_")[0] if info.get("class") is not None else None,
                 "x": float(info["pos"][0]),
-                "y": float(info["pos"][1])
+                "y": float(info["pos"][1]),
+                "updated_by_scan": False if self.update_targets else True
             }
             for tid, info in self.target_positions.items()
             if tid not in target_order
@@ -916,10 +925,6 @@ class RunnerFinal(threading.Thread):
         self.cmd.stop()
 
     def update_dynamic_layer_with_targets(self):
-        # Radii policy: larger for stale (not updated in this scan), smaller for fresh (updated now)
-        STALE_RADIUS_M  = 0.10  # larger
-        FRESH_RADIUS_M  = 0.05  # smaller
-
         targets = getattr(self, 'all_targets_world_dict', {}) or {}
         obstacles = getattr(self, 'all_obstacles_world_dict', {}) or {}
 
@@ -936,7 +941,7 @@ class RunnerFinal(threading.Thread):
                 continue  # skip malformed entries
             positions.append((x, y))
             is_fresh = bool(obj.get("updated_by_scan", False))
-            radii.append(FRESH_RADIUS_M if is_fresh else STALE_RADIUS_M)
+            radii.append(self.obstacle_sizes["detected"] if is_fresh else self.obstacle_sizes["undetected"])
 
         # Push to the grid (safe to call with empty lists)
         self.grid.set_dynamic_fruits_sizes(positions=positions, fruit_radii_m=radii)

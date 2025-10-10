@@ -417,6 +417,9 @@ def _parse_args():
     parser.add_argument("--log", type=str, default='INFO', choices=['DEBUG','INFO','WARNING','ERROR','CRITICAL'], help='Logging level')
     parser.add_argument("--model", type=str, default='models/PiBotAiMk2_V5.pt', help='YOLO model path (optional)')
     parser.add_argument("--use_fusion", action='store_true', help='Fuse bbox-height with bottom-pixel ground-ray for fruit range')
+    parser.add_argument("--update_targets", type=bool, default=True, help='Whether to update target positions from live detections')
+    parser.add_argument("--obstacle_size_large", type=float, default=0.08, help='Size of un-updated obstacles (m)')
+    parser.add_argument("--obstacle_size_small", type=float, default=0.06, help='Size of updated obstacles (m)')
     # Pose smoothing (control/GUI)
     parser.add_argument("--pose_smoothing", action='store_true', help='Enable EMA + rate-limited smoothed pose for control/GUI')
     parser.add_argument("--pose_alpha_pos", type=float, default=0.2, help='EMA alpha for x/y')
@@ -428,6 +431,7 @@ def _parse_args():
     parser.add_argument("--aruco_kd", type=float, default=1.0, help='Adaptive R scale by range: (1 + kd*range^2)')
     parser.add_argument("--level", type=int, default=1, choices=[1,2], help='Demo level: 1 or 2 (default 1)')
     parser.add_argument("--interactive_gui", action='store_true', help='Allow GUI clicks to set manual goals (Runner executes)')
+    
     return parser.parse_known_args()
 
 
@@ -702,6 +706,13 @@ def main():
         aruco_positions=aruco_true_pos,
         shopping_list=shopping_list,
         target_positions=known_targets,   # renamed from known_targets
+
+        update_targets=bool(args.update_targets),
+
+        obstacle_sizes={
+            "undetected": float(args.obstacle_size_large),
+            "detected": float(args.obstacle_size_small),
+        },
     )
     runner.start()
 
