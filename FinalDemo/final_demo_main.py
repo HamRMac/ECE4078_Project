@@ -35,7 +35,7 @@ from planning.grid_map import GridMap
 from state_machine.state_machine import PiBotFruitSearchSM
 from runtime.world_model import WorldModel
 from runtime.robot_commander import RobotCommander
-from runtime.runner import Runner
+from runtime.runner_finaldemo import RunnerFinal
 from runtime.intents import SetGoal, SwitchMode
 
 # Module logger
@@ -81,10 +81,12 @@ def read_true_map(fname):
         aruco_true_pos = np.empty([10, 2])
         aruco_true_pos_id = np.empty([10, 3])
 
+        rounding = 4
+
         # remove unique id of targets of the same type
         for key in gt_dict:
-            x = np.round(gt_dict[key]['x'], 1)
-            y = np.round(gt_dict[key]['y'], 1)
+            x = np.round(gt_dict[key]['x'], rounding)
+            y = np.round(gt_dict[key]['y'], rounding)
 
             if key.startswith('aruco'):
                 if key.startswith('aruco10'):
@@ -456,25 +458,40 @@ def _init_penguinpi(args):
             log.warning("Encoder polling disabled (%s)", e)
     return pibot
 
+import json
+
 def _load_map_and_shopping(args):
-    """Load map and shopping list when fruit positions are unknown.
+    """Load map, shopping list, and target positions from lab_output/targets.txt.
 
     Returns:
         aruco_true_pos: np.ndarray of shape (10,2)
         aruco_true_pos_id: np.ndarray of shape (10,3)
         search_list: list of fruit names (from shopping list)
-        search_poses: list of placeholder [None,None] positions
-        known_targets: empty dict
+        target_positions: dict[int, dict] e.g. {0: {"class": "orange", "pos": (x, y)}, ...}
     """
     log.info("Loading map file: %s", args.map)
     aruco_true_pos, aruco_true_pos_id = read_true_map(args.map)
+
+    log.info("Loading shopping list: %s", args.shopping_list)
     search_list = read_search_list(args.shopping_list)
 
-    known_targets = {}  # no known fruit positions
-    search_poses = [[None, None] for _ in search_list]
+    # --- Load fruit targets ---
+    targets_path = "lab_output/targets.txt"
+    log.info("Loading target positions from: %s", targets_path)
+    with open(targets_path, "r") as f:
+        targets_raw = json.load(f)
 
-    log.info("Loaded shopping list (positions unknown): %s", search_list)
-    return aruco_true_pos, aruco_true_pos_id, search_list, search_poses, known_targets
+    # Build target_positions in order of appearance
+    target_positions = {}
+    for idx, (_, coords) in enumerate(targets_raw.items()):
+        pos = (np.round(float(coords["x"]), 4), np.round(float(coords["y"]), 4))
+        target_positions[idx+1] = {"class": None, "pos": pos}
+
+    log.info("Loaded %d target positions", len(target_positions))
+    log.info("Loaded shopping list: %s", search_list)
+
+    return aruco_true_pos, aruco_true_pos_id, search_list, target_positions
+
 
 
 def _build_grid_from_aruco(aruco_true_pos: np.ndarray) -> GridMap:
@@ -610,8 +627,7 @@ def main():
     penguinpiInstance = _init_penguinpi(args)
 
     # 2) Map + shopping list (+ known targets for L3)
-    aruco_true_pos, aruco_true_pos_id, search_list, search_poses, known_targets = _load_map_and_shopping(args)
-
+    aruco_true_pos, aruco_true_pos_id, shopping_list, known_targets = _load_map_and_shopping(args)
 
     # 3) Occupancy grid
     gridMapInstance = _build_grid_from_aruco(aruco_true_pos)
@@ -643,52 +659,46 @@ def main():
     # Runner pose function is same EKF-based callback
     from pibot_actions import PiBotActions
     actions = PiBotActions(penguinpiInstance, calib_dir=args.calib_dir)
-    # Choose runner based on level
-    if int(args.level) == 3:
-        from runtime.runnerl3 import RunnerL3
-        runner = RunnerL3(commander=commander,
-                          ekf=ekfInstance,
-                          aruco_det=aruco_det,
-                          grid=gridMapInstance,
-                          planner=AStarPlanner(clearance_weight=1.5,
-                                                clearance_power=3.0,
-                                                clearance_epsilon=0.02*0.5,
-                                                min_prune_clearance=0.06,
-                                                clearance_mode='static_dynamic'),
-                          world=world,
-                          get_pose_fn=_get_pose,
-                          intents_q=intents_q,
-                          controller_kind=args.controller,
-                          hz=10.0,
-                          drive_enabled=not (args.no_run or args.ip == 'localhost'),
-                          # Level 3 SM is optional; RunnerL3 manages a simple flow
-                          state_machine=None,
-                          actions=actions,
-                          detector=yoloDetectorInstance,
-                          fruit_ranger=fruitRangerInstance,
-                          target_dims=target_dims_Dict,
-                          aruco_positions=aruco_true_pos,
-                          shopping_list=search_list,
-                          known_targets=known_targets)
-    else:
-        runner = Runner(commander=commander,
-                        ekf=ekfInstance,
-                        aruco_det=aruco_det,
-                        grid=gridMapInstance,
-                        planner=AStarPlanner(clearance_weight=0.6, clearance_power=2.0, clearance_epsilon=0.02*0.5, min_prune_clearance=0.10),
-                        world=world,
-                        get_pose_fn=_get_pose,
-                        intents_q=intents_q,
-                        controller_kind=args.controller,
-                        hz=10.0,
-                        drive_enabled=not (args.no_run or args.ip == 'localhost'),
-                        state_machine=stateMachineInstance,
-                        actions=actions,
-                        detector=yoloDetectorInstance,
-                        fruit_ranger=fruitRangerInstance,
-                        target_dims=target_dims_Dict,
-                        aruco_positions=aruco_true_pos,
-                        shopping_list=search_list)
+    
+    # Define planner
+    PLANNER_OPTS = {
+        "clearance_weight": 1.5,
+        "clearance_power": 3.0,
+        "clearance_epsilon": 0.01,   # 0.02 * 0.5
+        "min_prune_clearance": 0.06,
+        "clearance_mode": "static_dynamic",
+    }
+    planner = AStarPlanner(**PLANNER_OPTS)
+    drive_enabled = (args.ip != "localhost") and (not args.no_run)
+
+    # Define runner
+    runner = RunnerFinal(
+        # External components
+        commander=commander,
+        ekf=ekfInstance,
+        aruco_det=aruco_det,
+        grid=gridMapInstance,
+        planner=planner,
+        world=world,
+        get_pose_fn=_get_pose,
+        intents_q=intents_q,  # unused for L3
+
+        # Runtime controls
+        controller_kind=args.controller,
+        hz=10.0,
+        drive_enabled=drive_enabled,
+
+        # Capabilities
+        actions=actions,
+        detector=yoloDetectorInstance,
+        fruit_ranger=fruitRangerInstance,
+
+        # World data
+        target_dims=target_dims_Dict,
+        aruco_positions=aruco_true_pos,
+        shopping_list=shopping_list,
+        target_positions=known_targets,   # renamed from known_targets
+    )
     runner.start()
 
     # Providers for GUI (display-only)

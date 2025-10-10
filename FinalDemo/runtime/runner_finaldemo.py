@@ -6,6 +6,7 @@ from typing import Optional, Tuple, List, Dict
 
 import numpy as np
 
+
 from navigation.controller import ControllerManager
 from planning.astar import AStarPlanner
 from planning.grid_map import GridMap
@@ -14,27 +15,40 @@ from .world_model import WorldModel
 from .robot_commander import RobotCommander
 from pibot_actions import PiBotActions
 
+from slam.ekf import EKF
+from slam.aruco_detector import aruco_detector
+from YOLO.detector import Detector
+
+from perception.fruit_ranger import FruitRanger
+
 log = logging.getLogger(__name__)
 
 
 class RunnerFinal(threading.Thread):
     """Final Demo mission runner (focused logic).
 
+    Assumptions:
+    - Robot starts at the centre of the arena, facing +X
+    - Arena is square, with known size
+    - We have a known map of ArUco positions and the robot can see at least one at start
+    - We have a known map of all possible fruit positions (unclassified)
+    - We have a shopping list of fruit types to collect
+    - Apart from the obstacles, the arena is otherwise free drivable space
     Behaviour:
-    - Perform an initial scan to locate the ArUco markers (if any) and update the static layer.
-    - Divide map into sectors 
-    - Perform a scan and clustering (as in Level 4) and update the grid safety layer.
-      When clustering/detections exist, drop any detection that is at roughly the same
-      location as a known target (<= 0.15 m).
-    - Append known target locations to the static exclusion map (as with ArUCO inflation).
-    - Compute a route using known target positions in shopping-list order. For each target,
-      plan to a 0.20 m standoff, retry once if needed, print on success, and wait briefly.
-    - After all targets processed, print "Reached all targets" and stop the robot.
+    - Robot checks for closest unclassified fruit position
+    - If robot is within line of sight of the fruit position it will turn and face it
+    - The robot will use the detector to try and classify the fruit
+    - If the detected fruit is close to the location of the unclassified fruit, it is marked as classified with the detected type
+    - If the fruit is on the shopping list, the robot will plan and drive to a standoff point near the fruit (and report what fruit it is going to collect)
+    - If the fruit is not on the shopping list, the robot will detect the next closest unclassified fruit and repeat
+    - If the robot cannot see any unclassified fruit, it will navigate to the closest one
+    - Once the robot has collected all fruit on the shopping list, it will report success and stop
     """
 
     def __init__(self,
                  commander: RobotCommander,
-                 ekf, aruco_det,
+                 ekf: EKF,
+                 aruco_det: aruco_detector,
                  grid: GridMap,
                  planner: Optional[AStarPlanner],
                  world: WorldModel,
@@ -50,26 +64,33 @@ class RunnerFinal(threading.Thread):
                  target_dims=None,
                  aruco_positions: np.ndarray = None,
                  shopping_list: Optional[List[str]] = None,
-                 known_targets: Optional[Dict[str, Tuple[float, float]]] = None):
-        super().__init__(daemon=True, name="RunnerL3")
-        self.cmd = commander
-        self.ekf = ekf
-        self.aruco = aruco_det
-        self.grid = grid
-        self.planner = planner or AStarPlanner()
-        self.world = world
+                 target_positions: Optional[Dict[int, Tuple[float, float]]] = None
+                 ):
+        super().__init__(daemon=True, name="RunnerFinal")
+
+        # External components
+        self.cmd: RobotCommander = commander
+        self.ekf: EKF = ekf
+        self.aruco: aruco_detector = aruco_det
+        self.grid: GridMap = grid
+        self.planner: AStarPlanner = planner or AStarPlanner()
+        self.world: WorldModel = world
         self.get_pose_fn = get_pose_fn
-        self.ctrl = ControllerManager(controller_kind)
-        self._stop = threading.Event()
+        self.ctrl: ControllerManager = ControllerManager(controller_kind)
+        self._stop: threading.Event = threading.Event()
+        self.actions: PiBotActions = actions
+        self.detector: Optional[Detector] = detector
+        self.fruit_ranger: Optional[FruitRanger] = fruit_ranger
+        self.target_dims: Optional[Dict[str, Tuple[float, float, float]]] = target_dims
+
+        # Settings
         self._drive_enabled = bool(drive_enabled)
-        self.actions = actions
-        self.detector = detector
-        self.fruit_ranger = fruit_ranger
-        self.target_dims = target_dims
-        # Use provided ArUco positions for safety mask updates
+
+        # Provided data
         self.aruco_positions = aruco_positions
+        # This target_positions is in the order by which they will be reached
+        self.target_positions: Dict[int, Dict] = target_positions or {}  # {1: {class:"",pos:(x,y)}}
         self.shopping_list: List[str] = list(shopping_list or [])
-        self.known_targets: Dict[str, Tuple[float, float]] = dict(known_targets or {})
 
         # Planning state
         self._goal: Optional[Tuple[float, float]] = None
@@ -78,12 +99,15 @@ class RunnerFinal(threading.Thread):
         self._period = 1.0 / max(1.0, float(hz))
         self._xtrack_thresh: float = 0.05
         self._just_replanned: bool = False
-
+        
+        '''
         # Ordered route derived from shopping list
-        self._route: List[Tuple[str, Tuple[float, float]]] = []
+        self._route = ()
+        
         for name in self.shopping_list:
             if name in self.known_targets:
                 self._route.append((name, self.known_targets[name]))
+        '''
 
     # ---------------- Small helpers ----------------
     def stop(self):
@@ -361,7 +385,7 @@ class RunnerFinal(threading.Thread):
         self._plan_waypoints = [(rx, ry), (gx, gy)]
         self._wp_idx = 0
         self.world.set_plan(self._plan_waypoints, active_idx=self._wp_idx, color='red')
-        self.world.set_status(mode='AUTO', sm_state='L3', action='beeline_pose', target=target_name)
+        self.world.set_status(mode='AUTO', sm_state='FinalDemo', action='beeline_pose', target=target_name)
         t0 = time.time()
         timeout = 8.0  # safety cap for straight drive
         while not self._stop.is_set() and self._plan_waypoints:
@@ -414,7 +438,7 @@ class RunnerFinal(threading.Thread):
             ok_gate, goal = (False, target_xy)
         if not ok_gate:
             return False
-        self.world.set_status(mode='AUTO', sm_state='L3', action='beeline_yolo', target=target_name)
+        self.world.set_status(mode='AUTO', sm_state='FinalDemo', action='beeline_yolo', target=target_name)
 
         while not self._stop.is_set():
             # Acquire frame
@@ -509,128 +533,195 @@ class RunnerFinal(threading.Thread):
         return False
 
     def _scan_and_update(self):
-        # Execute scan (drive-based) if available
+        # Tunables
+        CLOSE_DET_RADIUS_M = 0.8   # "close to the robot" (consistent with earlier usage)
+        ASSIGN_THRESH_M    = 0.30  # 30 cm
+
+        # 1) Execute scan (drive-based) if available
         if self.actions is not None and self._drive_enabled:
             try:
                 self.actions.scan(step_angle_deg=30.0,
-                                   detector=self.detector,
-                                   fruit_ranger=self.fruit_ranger,
-                                   target_dims=self.target_dims,
-                                   get_pose_fn=self.get_pose_fn,
-                                   turning_tick=40,
-                                   pause_s=1.0)
+                                detector=self.detector,
+                                fruit_ranger=self.fruit_ranger,
+                                target_dims=self.target_dims,
+                                get_pose_fn=self.get_pose_fn,
+                                turning_tick=40,
+                                pause_s=1.0)
             except Exception as e:
                 log.warning("Scan failed: %s", e)
-        # record scan time for beeline gating
+
+        # Record scan time (used elsewhere)
         self._last_scan_time = time.time()
 
-        # Read clusters
-        all_dets = []
+        # 2) Gather detections (position + class) and keep only those close to the robot
         try:
-            all_dets = getattr(self.actions, 'current_obj_positions', []) or []
+            raw_dets = getattr(self.actions, 'current_obj_positions', []) or []
         except Exception:
-            all_dets = []
+            raw_dets = []
 
-        # Level 3 policy:
-        # - GUI detections exclude any item whose class/label is in the shopping list
-        #   and exclude near-known-target duplicates.
-        # - Keep-clear uses ALL detections irrespective of class.
-        shopping = set(str(s) for s in (self.shopping_list or []))
-        gui_dets = []
-        keepclear_positions = []
-        for d in all_dets:
+        rx, ry, _ = self.get_pose_fn()
+
+        close_dets = []
+        for d in raw_dets:
             try:
                 pos = d.get('position')
                 if not isinstance(pos, (list, tuple)) or len(pos) < 2:
                     continue
                 wx, wy = float(pos[0]), float(pos[1])
-                # Label check for filtering
+
+                # Keep only detections close to the robot
+                if self._dist((rx, ry), (wx, wy)) > CLOSE_DET_RADIUS_M:
+                    continue
+
+                # Normalise label key
                 lab = d.get('class') if ('class' in d) else d.get('label')
-                lab = str(lab) if lab is not None else ''
-                if lab in shopping:
+                if lab is None or lab == '':
                     continue
-                if any(self._dist((wx, wy), txy) <= 0.15 for txy in self.known_targets.values()):
-                    continue
-                # Keep-clear set
-                keepclear_positions.append((wx, wy))
-                gui_dets.append(d)
+                lab = str(lab)
+
+                close_dets.append({"class": lab, "position": (wx, wy)})
             except Exception:
                 continue
-        self.world.set_detections(gui_dets)
 
-        # Update visibility-based safety and dynamic fruit obstacles (use keep-clear set)
+        # 3) For each detection, identify the closest target and possibly classify/update it
+        if self.target_positions and close_dets:
+            for det in close_dets:
+                dpos = det["position"]
+
+                # Find nearest target by current stored position
+                try:
+                    nearest_tid = min(
+                        self.target_positions.keys(),
+                        key=lambda tid: self._dist(self.target_positions[tid]["pos"], dpos)
+                    )
+                except ValueError:
+                    # No targets
+                    break
+
+                nearest = self.target_positions[nearest_tid]
+                # If unclassified and within 30 cm, adopt detection's class and location
+                if nearest.get("class") is None:
+                    if self._dist(nearest["pos"], dpos) <= ASSIGN_THRESH_M:
+                        nearest["class"] = det["class"]
+                        nearest["pos"] = dpos
+
+        # 4) (Optional) publish detections to the world model for GUI
         try:
-            fruit_positions = list(keepclear_positions)
-            if self.aruco_positions is not None and self.grid.size is not None:
-                safe = compute_safety_mask(self.grid,
-                                           robot_pose=self.get_pose_fn(),
-                                           aruco_positions=self.aruco_positions,
-                                           fruit_positions=fruit_positions,
-                                           marker_length=0.07,
-                                           fruit_radius=0.05,
-                                           fov_deg=360.0,
-                                           max_distance=0.8,
-                                           step_cells=2)
-                self.grid.apply_safety_mask(safe)
-            if fruit_positions:
-                self.grid.set_dynamic_fruits(fruit_positions, fruit_radius_m=0.05)
+            self.world.set_detections(close_dets)
+        except Exception:
+            pass
+
+        # 5) Rebuild ONLY the dynamic layer (no safety layer updates)
+        try:
+            self.update_dynamic_layer_with_targets()
         except Exception as e:
-            log.debug("Safety/dynamic update skipped: %s", e)
+            log.debug("Dynamic layer update skipped: %s", e)
 
     # ---------------- Main loop ----------------
     def run(self):
-        log.info("RunnerL3 starting; targets: %s", ", ".join([n for n, _ in self._route]) or '<none>')
+        log.info("FinalDemo Runner starting!")
 
-        # Append known targets to static exclusion map
+        # Allow the robot to go anywhere (no dark zones)
+        self.grid.mark_all_safe()
+
+        # Extract Target Order
+        target_order = [key for key in self.target_positions.keys()]
+        target_order.sort()
+
+        # Append known targets to dynamic exclusion map
         try:
-            self._apply_static_target_exclusions([xy for _, xy in self._route], fruit_radius_m=0.15)
+            self.update_dynamic_layer_with_targets()
         except Exception:
             pass
 
         # Publish targets info to WorldModel for GUI overlay
         try:
-            order = list(self.shopping_list or [])
-            remaining = {name: (float(xy[0]), float(xy[1])) for name, xy in self._route}
-            positions = {str(k): (float(v[0]), float(v[1])) for k, v in self.known_targets.items()}
-            self.world.set_targets_info(order=order,
+            # Extract Positions
+            positions = {
+                str(k): (float(info["pos"][0]), float(info["pos"][1]))
+                for k, info in self.target_positions.items()
+            }
+            remaining = positions.copy()
+
+            # Set the targets info in the world model
+            self.world.set_targets_info(order=target_order,
                                         remaining=remaining,
                                         collected=[],
                                         seen_not_collected=list(remaining.keys()),
-                                        unseen=[n for n in order if n not in remaining],
+                                        unseen=[n for n in target_order if n not in remaining],
                                         active=None,
                                         positions=positions)
             # Initial status
-            self.world.set_status(mode='AUTO', sm_state='L3', action='init', progress=f"0/{len(self._route)}")
+            self.world.set_status(mode='AUTO', sm_state='FinalDemo', action='init', progress=f"0/{total_targets}")
         except Exception:
             pass
+        
+        # Continue processing until all targets are classified
+        total_targets = len(self.target_positions)
+        while any(info.get("class") is None for info in self.target_positions.values()):
+            # 1) Choose closest unclassified target
+            wx, wy, _ = self.get_pose_fn()
 
-        # Visit targets in order with scan → approach loop
-        for idx, (name, txy) in enumerate(self._route):
-            log.info("🎯 Heading to target %d/%d: %s at (%.2f, %.2f)", idx + 1, len(self._route), name, txy[0], txy[1])
+            unclassified = [
+                (tid, info) for tid, info in self.target_positions.items()
+                if info.get("class") is None and info.get("pos") is not None
+            ]
+            if not unclassified:
+                log.warning("No unclassified targets with known positions; stopping.")
+                break
+
+            def sqdist(p):
+                dx, dy = p[0] - wx, p[1] - wy
+                return dx*dx + dy*dy
+
+            # tie-break by tid for determinism
+            idx, info = min(unclassified, key=lambda kv: (sqdist(kv[1]["pos"]), kv[0]))
+            txy = (float(info["pos"][0]), float(info["pos"][1]))
+            name = str(idx)
+
+            classified = sum(1 for v in self.target_positions.values() if v.get("class") is not None)
+            progress_str = f"{classified + 1}/{total_targets}"
+
             if self._stop.is_set():
                 break
-            # Mark this as the active target in the world model
+
+            # 2) Mark this as the active target in the world model
             try:
-                info = self.world.get_targets_info()
-                self.world.set_targets_info(order=info.get('order', []),
-                                            remaining=info.get('remaining', {}),
-                                            collected=info.get('collected', []),
-                                            seen_not_collected=info.get('seen_not_collected', []),
-                                            unseen=info.get('unseen', []),
-                                            active=name,
-                                            positions=info.get('positions', {}))
-                self.world.set_status(mode='AUTO', sm_state='L3', action='scan', target=name,
-                                       progress=f"{idx+1}/{len(self._route)}")
+                wm = self.world.get_targets_info()
+                self.world.set_targets_info(
+                    order=wm.get('order', []),
+                    remaining=wm.get('remaining', {}),
+                    collected=wm.get('collected', []),
+                    seen_not_collected=wm.get('seen_not_collected', []),
+                    unseen=wm.get('unseen', []),
+                    active=name,
+                    positions=wm.get('positions', {})
+                )
+                self.world.set_status(mode='AUTO', sm_state='FinalDemo', action='scan',
+                                    target=name, progress=progress_str)
             except Exception:
                 pass
+
+            log.info("🎯 Heading to closest unclassified target id=%d: %s at (%.2f, %.2f) [%s]",
+                    idx, name, txy[0], txy[1], progress_str)
+            
 
             attempt = 0
             while not self._stop.is_set():
                 # 1) Scan
                 log.info("Starting scan before approaching %s (attempt %d)", name, attempt + 1)
-                self.world.set_status(mode='AUTO', sm_state='L3', action='scan', target=name,
-                                       progress=f"{idx+1}/{len(self._route)}")
+                self.world.set_status(mode='AUTO', sm_state='FinalDemo', action='scan', target=name,
+                                       progress=f"{idx+1}/{total_targets}")
                 self._scan_and_update()
+
+                # Refresh target coords in case the scan updated them
+                new_txy = tuple(self.target_positions[idx]["pos"])
+                if self._dist(txy, new_txy) > 0.03:  # 3 cm hysteresis to avoid thrashing
+                    log.info("Target %s moved from (%.2f, %.2f) to (%.2f, %.2f); replanning",
+                            str(idx), txy[0], txy[1], new_txy[0], new_txy[1])
+                    txy = new_txy
+                    self._goal = txy
+
                 pose = self.get_pose_fn()
                 self.world.set_pose(pose)
                 dist = self._dist((pose[0], pose[1]), txy)
@@ -656,54 +747,18 @@ class RunnerFinal(threading.Thread):
                                                     unseen=unseen,
                                                     active=None,
                                                     positions=info.get('positions', {}))
-                        self.world.set_status(mode='AUTO', sm_state='L3', action='reached', target=name,
-                                               progress=f"{idx+1}/{len(self._route)}")
+                        self.world.set_status(mode='AUTO', sm_state='FinalDemo', action='reached', target=name,
+                                               progress=f"{idx+1}/{total_targets}")
                     except Exception:
                         pass
                     break  # next target
-                # 2) Beeline: prefer detector-guided crawl, else LOS pose-based
-                beeline_ok = False
-                '''
-                try:
-                    beeline_ok = self._attempt_beeline_yolo(name, txy, stop_radius_m=0.25)
-                except Exception:
-                    beeline_ok = False
-                if not beeline_ok:
-                    beeline_ok = self._attempt_beeline_pose(name, txy, stop_radius_m=0.25)
-                '''
-                if beeline_ok:
-                    print(f"🎯 <-- Reached {name}")
-                    time.sleep(2.0)
-                    try:
-                        info = self.world.get_targets_info()
-                        remaining = dict(info.get('remaining', {}))
-                        if name in remaining:
-                            del remaining[name]
-                        collected = list(info.get('collected', []))
-                        if name not in collected:
-                            collected.append(name)
-                        order = list(info.get('order', []))
-                        seen = [n for n in remaining.keys()]
-                        unseen = [n for n in order if (n not in remaining) and (n not in collected)]
-                        self.world.set_targets_info(order=order,
-                                                    remaining=remaining,
-                                                    collected=collected,
-                                                    seen_not_collected=seen,
-                                                    unseen=unseen,
-                                                    active=None,
-                                                    positions=info.get('positions', {}))
-                        self.world.set_status(mode='AUTO', sm_state='L3', action='reached', target=name,
-                                               progress=f"{idx+1}/{len(self._route)}")
-                    except Exception:
-                        pass
-                    break
 
-                # 3) Plan: get as close as possible
+                # 2) Plan: get as close as possible
                 planned = self._plan_best_approach_to_target(txy)
                 if not planned:
                     log.info("No path found yet towards %s; rescanning", name)
-                    self.world.set_status(mode='AUTO', sm_state='L3', action='replan', target=name,
-                                           progress=f"{idx+1}/{len(self._route)}")
+                    self.world.set_status(mode='AUTO', sm_state='FinalDemo', action='replan', target=name,
+                                           progress=f"{idx+1}/{total_targets}")
                     time.sleep(0.5)
                     attempt += 1
                     continue
@@ -717,7 +772,7 @@ class RunnerFinal(threading.Thread):
                     self._drive_step(pose)
                     try:
                         total = max(1, len(self._plan_waypoints) - 1)
-                        self.world.set_status(mode='AUTO', sm_state='L3', action='drive', target=name,
+                        self.world.set_status(mode='AUTO', sm_state='FinalDemo', action='drive', target=name,
                                                progress=f"{min(self._wp_idx,total)}/{total}")
                     except Exception:
                         pass
@@ -746,8 +801,8 @@ class RunnerFinal(threading.Thread):
                                                         unseen=unseen,
                                                         active=None,
                                                         positions=info.get('positions', {}))
-                            self.world.set_status(mode='AUTO', sm_state='L3', action='reached', target=name,
-                                                   progress=f"{idx+1}/{len(self._route)}")
+                            self.world.set_status(mode='AUTO', sm_state='FinalDemo', action='reached', target=name,
+                                                   progress=f"{idx+1}/{total_targets}")
                         except Exception:
                             pass
                         done_this_target = True
@@ -759,6 +814,11 @@ class RunnerFinal(threading.Thread):
                 if done_this_target:
                     break
 
-        self.world.set_status(mode='AUTO', sm_state='L3', action='done')
+        self.world.set_status(mode='AUTO', sm_state='FinalDemo', action='done')
         print("Reached all targets")
         self.cmd.stop()
+
+    def update_dynamic_layer_with_targets(self):
+        positions = [self.target_positions[key]["pos"] for key in self.target_positions]
+        radii = [0.25 if self.target_positions[key]["class"] is None else 0.08 for key in self.target_positions]
+        self.grid.set_dynamic_fruits_sizes(positions=positions, fruit_radii_m=radii)

@@ -187,6 +187,32 @@ class GridMap:
         self._clearance_cache = None
         if hasattr(self, '_clearance_cache_static_dynamic'):
             self._clearance_cache_static_dynamic = None  # type: ignore[attr-defined]
+    
+    def set_dynamic_fruits_sizes(self, positions: List[Tuple[float, float]], fruit_radii_m: List[float]):
+        """Replace dynamic obstacles with buffered fruit obstacles.
+
+        Buffer = fruit_radius_m + robot_radius + inflation_margin (conservative),
+        matching the ArUco inflation style used in the static layer.
+        """
+        assert self.dynamic_layer is not None, "Grid not built yet."
+        assert len(positions) == len(fruit_radii_m), "Positions and fruit_radii_m must have the same length."
+        # Clear previous dynamic obstacles (we use current fruit set)
+        self.clear_dynamic()
+        for (x, y), radius in zip(positions, fruit_radii_m):
+            inflate_r = float(radius) + self.robot_radius + self.inflation_margin
+            rc = max(1, int(math.ceil(inflate_r / self.res)))
+            r, c = self.world_to_grid(float(x), float(y))
+            cv2.circle(self.dynamic_layer, (c, r), rc, color=255, thickness=-1)
+        # Invalidate clearance caches
+        self._clearance_cache = None
+        if hasattr(self, '_clearance_cache_static_dynamic'):
+            self._clearance_cache_static_dynamic = None  # type: ignore[attr-defined]
+            r, c = self.world_to_grid(float(x), float(y))
+            cv2.circle(self.dynamic_layer, (c, r), rc, color=255, thickness=-1)
+        # Invalidate clearance caches
+        self._clearance_cache = None
+        if hasattr(self, '_clearance_cache_static_dynamic'):
+            self._clearance_cache_static_dynamic = None  # type: ignore[attr-defined]
 
     def combined(self) -> np.ndarray:
         assert self.static_layer is not None and self.dynamic_layer is not None, "Grid not built yet."
@@ -322,6 +348,10 @@ class GridMap:
     def clear_safety(self):
         assert self.safety_layer is not None, "Grid not built yet."
         self.safety_layer.fill(255)
+
+    def mark_all_safe(self):
+        assert self.safety_layer is not None, "Grid not built yet."
+        self.safety_layer.fill(0)
 
     def apply_safety_mask(self, safe_mask: np.ndarray):
         """Integrate a boolean/uint8 mask (grid-aligned) where True means observed safe.

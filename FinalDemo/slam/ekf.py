@@ -182,21 +182,21 @@ class EKF:
         eps_w = 0.1
         if abs(v) < eps_v and abs(w) > eps_w:
             mot_type = 1
-            print("Pure Rotation")
+            #print("Pure Rotation")
             Q = self.predict_covariance(raw_drive_meas)
             # x and y can't change much when rotating
             Q[0,0] = 0  # x position uncertainty
             Q[1,1] = 0  # y position uncertainty
         elif abs(v) > eps_v and abs(w) < eps_w:
             mot_type = 2
-            print("Pure Translation")
+            #print("Pure Translation")
             Q = self.predict_covariance(raw_drive_meas)
             Q[2,2] *= 0.01  # heading uncertainty
             # theta can't change much when translating
         else:
             mot_type = 3
-            print("Stationary or Arcing")
-            print("v" + str(v) + " w" + str(w))
+            #print("Stationary or Arcing")
+            #print("v" + str(v) + " w" + str(w))
             # The robot must not drive in an arc as it will treat this as stationary at present.
             Q = self.predict_covariance(raw_drive_meas)
             Q[0:3,0:3] = 0
