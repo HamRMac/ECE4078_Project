@@ -426,7 +426,7 @@ def _parse_args():
     # ArUco EKF gating/adaptive noise
     parser.add_argument("--aruco_gate", type=float, default=11.34, help='Mahalanobis gating threshold (chi2) for 2D aruco updates')
     parser.add_argument("--aruco_kd", type=float, default=1.0, help='Adaptive R scale by range: (1 + kd*range^2)')
-    parser.add_argument("--level", type=int, default=3, choices=[3,4], help='Logic level: 3 or 4 (default 3)')
+    parser.add_argument("--level", type=int, default=1, choices=[1,2], help='Demo level: 1 or 2 (default 1)')
     parser.add_argument("--interactive_gui", action='store_true', help='Allow GUI clicks to set manual goals (Runner executes)')
     return parser.parse_known_args()
 
@@ -483,9 +483,13 @@ def _load_map_and_shopping(args):
 
     # Build target_positions in order of appearance
     target_positions = {}
-    for idx, (_, coords) in enumerate(targets_raw.items()):
+    for idx, (class_name, coords) in enumerate(targets_raw.items()):
         pos = (np.round(float(coords["x"]), 4), np.round(float(coords["y"]), 4))
-        target_positions[idx+1] = {"class": None, "pos": pos}
+        # If in level 1 keep the class, if in level 2 set to None
+        if args.level == 1:
+            target_positions[idx+1] = {"class": class_name, "pos": pos}
+        else:
+            target_positions[idx+1] = {"class": None, "pos": pos}
 
     log.info("Loaded %d target positions", len(target_positions))
     log.info("Loaded shopping list: %s", search_list)

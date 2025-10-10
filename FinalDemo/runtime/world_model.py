@@ -17,15 +17,13 @@ class WorldModel:
             "next_idx": None,          # (ix, iy) or None
             "next_point": None,        # (x, y) or None
         }
+        
         # Targets info for GUI (shopping list status)
         self._targets_info: Dict[str, Any] = {
-            "order": [],               # shopping list order
-            "remaining": {},           # fruit -> (x,y)
-            "collected": [],           # list of fruit names
-            "seen_not_collected": [],  # list of fruit names
-            "unseen": [],              # list of fruit names
-            "active": None,            # currently active target name
-            "positions": {},           # all known target positions: fruit -> (x,y)
+            "targets": {},
+            "active": None,
+            "collected": [],
+            "total_targets": 0
         }
 
     # Pose
@@ -98,23 +96,20 @@ class WorldModel:
             return s
 
     # Targets info
-    def set_targets_info(self, order: List[str], remaining: Dict[str, Tuple[float, float]],
-                         collected: List[str], seen_not_collected: List[str], unseen: List[str],
-                         active: Optional[str] = None,
-                         positions: Optional[Dict[str, Tuple[float, float]]] = None) -> None:
+    def set_targets_info(self,
+					 targets: Dict[int, Dict[str, float | str]],
+					 active: int,
+					 collected: List[str]
+					) -> None:
         with self._lock:
             self._targets_info = {
-                "order": list(order or []),
-                "remaining": {str(k): (float(v[0]), float(v[1])) for k, v in (remaining or {}).items()},
-                "collected": list(collected or []),
-                "seen_not_collected": list(seen_not_collected or []),
-                "unseen": list(unseen or []),
-                "active": None if active is None else str(active),
-                "positions": {str(k): (float(v[0]), float(v[1])) for k, v in (positions or {}).items()},
+                "targets": targets,
+                "active": active,
+                "collected": collected,
+                "total_targets": len(targets)
             }
 
     def get_targets_info(self) -> Dict[str, Any]:
         with self._lock:
             info = dict(self._targets_info)
-            info["remaining"] = dict(self._targets_info.get("remaining", {}))
             return info

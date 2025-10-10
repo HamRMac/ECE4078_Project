@@ -284,7 +284,7 @@ class EKF:
         K = self.P @ H.T @ np.linalg.inv(S)
         if motion_type != 3:
             K *= 0.5
-            print("Reduced Kalman Gain")
+            # print("Reduced Kalman Gain")
         x_new = x + K @ y
         I = np.eye(self.P.shape[0])
         self.P = (I - K @ H) @ self.P @ (I - K @ H).T + K @ Rm @ K.T

@@ -400,51 +400,41 @@ class PiBotGUI:
                 else:
                     # No alpha: simple 0.5 blend
                     roi[:] = (0.5 * roi + 0.5 * icon_crop).astype(roi.dtype)
-
+        
+        # -- TARGETS --
         # Draw target fruits overlay (always on top) with green outline
         try:
-            targets = self.targets_provider() if callable(self.targets_provider) else None
+            all_targets = self.targets_provider() if callable(self.targets_provider) else None
         except Exception:
-            targets = None
-        if isinstance(targets, dict):
+            all_targets = None
+        if isinstance(all_targets, dict):
             # Expect WorldModel.get_targets_info() shape
-            remaining = targets.get('remaining', {}) or {}
-            order = targets.get('order', []) or []
-            collected = targets.get('collected', []) or []
-            active = targets.get('active', None)
-            positions = targets.get('positions', {}) or {}
+            targets = all_targets.get("targets", {})
+            active = all_targets.get("active", None)
+            if active is None:
+                active = -1
+            collected = all_targets.get("collected", [])
 
-            # Draw remaining (including active) in shopping list order for determinism
-            order_remaining = [n for n in order if n in remaining]
-            order_remaining += [n for n in remaining.keys() if n not in order_remaining]
-            for name in order_remaining:
-                try:
-                    xy = remaining.get(name)
-                    if not isinstance(xy, (list, tuple)) or len(xy) < 2:
-                        continue
-                    rr, cc = self.grid.world_to_grid(float(xy[0]), float(xy[1]))
-                    cx, cy = int(cc * self.scale), int(rr * self.scale)
-                    # Color by state: green=active, red=not done
-                    color = (0, 220, 0) if (active is not None and str(name) == str(active)) else (0, 0, 220)
-                    cv2.circle(vis_bgr, (cx, cy), 10, color, thickness=2, lineType=cv2.LINE_AA)
-                    # Label
-                    cv2.putText(vis_bgr, str(name)[:10], (cx + 12, cy - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 0, 0), 2, cv2.LINE_AA)
-                    cv2.putText(vis_bgr, str(name)[:10], (cx + 12, cy - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1, cv2.LINE_AA)
-                except Exception:
-                    continue
             # Draw collected in blue
-            for name in collected:
+            for id, target_info in targets.items():
                 # Use known positions mapping to draw completed targets
-                xy = positions.get(name) if isinstance(positions, dict) else None
-                if not isinstance(xy, (list, tuple)) or len(xy) < 2:
-                    continue
+                x = target_info.get("x"); y = target_info.get("y"); 
+                disp_name = target_info.get("disp_name", str(id))
+                if disp_name is None:
+                    disp_name = str(id)
                 try:
-                    rr, cc = self.grid.world_to_grid(float(xy[0]), float(xy[1]))
+                    rr, cc = self.grid.world_to_grid(float(x), float(y))
                     cx, cy = int(cc * self.scale), int(rr * self.scale)
-                    color = (220, 0, 0)  # blue in BGR
+                    # Change colour based on state
+                    if id in collected:
+                        color = (220, 0, 0)  # blue in BGR
+                    elif id == active:
+                        color = (0, 220, 0)  # blue in BGR
+                    else:
+                        color = (0, 0, 220)
                     cv2.circle(vis_bgr, (cx, cy), 10, color, thickness=2, lineType=cv2.LINE_AA)
-                    cv2.putText(vis_bgr, str(name)[:10], (cx + 12, cy - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 0, 0), 2, cv2.LINE_AA)
-                    cv2.putText(vis_bgr, str(name)[:10], (cx + 12, cy - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1, cv2.LINE_AA)
+                    cv2.putText(vis_bgr, str(disp_name)[:10], (cx + 12, cy - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 0, 0), 2, cv2.LINE_AA)
+                    cv2.putText(vis_bgr, str(disp_name)[:10], (cx + 12, cy - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1, cv2.LINE_AA)
                 except Exception:
                     continue
 

@@ -2,10 +2,10 @@ import threading
 import time
 import logging
 import math
-from typing import Optional, Tuple, List, Dict
+from typing import Optional, Tuple, List, Dict, Literal
+from collections import Counter
 
 import numpy as np
-
 
 from navigation.controller import ControllerManager
 from planning.astar import AStarPlanner
@@ -92,6 +92,10 @@ class RunnerFinal(threading.Thread):
         self.target_positions: Dict[int, Dict] = target_positions or {}  # {1: {class:"",pos:(x,y)}}
         self.shopping_list: List[str] = list(shopping_list or [])
 
+        # Generated data
+        self.all_obstacles_world_dict = {}
+        self.all_targets_world_dict = {}
+
         # Planning state
         self._goal: Optional[Tuple[float, float]] = None
         self._plan_waypoints: List[Tuple[float, float]] = []
@@ -99,6 +103,8 @@ class RunnerFinal(threading.Thread):
         self._period = 1.0 / max(1.0, float(hz))
         self._xtrack_thresh: float = 0.05
         self._just_replanned: bool = False
+
+        self._target_mode: Literal['KNOWN_TARGETS','CHECK_ALL'] = 'KNOWN_TARGETS'
         
         '''
         # Ordered route derived from shopping list
@@ -583,27 +589,38 @@ class RunnerFinal(threading.Thread):
             except Exception:
                 continue
 
-        # 3) For each detection, identify the closest target and possibly classify/update it
-        if self.target_positions and close_dets:
-            for det in close_dets:
-                dpos = det["position"]
+        # 3) For each detection, identify the closest object (targets + obstacles) and update its entry
+        if (self.all_targets_world_dict or self.all_obstacles_world_dict) and close_dets:
+            def _iter_entries():
+                # tag which dict each entry comes from so we can update the right one
+                for k, v in self.all_targets_world_dict.items():
+                    yield ("targets", k, v)
+                for k, v in self.all_obstacles_world_dict.items():
+                    yield ("obstacles", k, v)
 
-                # Find nearest target by current stored position
+            for det in close_dets:
+                dpos = det["position"]  # (wx, wy)
                 try:
-                    nearest_tid = min(
-                        self.target_positions.keys(),
-                        key=lambda tid: self._dist(self.target_positions[tid]["pos"], dpos)
+                    which, key, entry = min(
+                        _iter_entries(),
+                        key=lambda t: self._dist((float(t[2]["x"]), float(t[2]["y"])), dpos)
                     )
                 except ValueError:
-                    # No targets
+                    # both dicts empty
                     break
 
-                nearest = self.target_positions[nearest_tid]
-                # If unclassified and within 30 cm, adopt detection's class and location
-                if nearest.get("class") is None:
-                    if self._dist(nearest["pos"], dpos) <= ASSIGN_THRESH_M:
-                        nearest["class"] = det["class"]
-                        nearest["pos"] = dpos
+                ex, ey = float(entry["x"]), float(entry["y"])
+                if self._dist((ex, ey), dpos) <= ASSIGN_THRESH_M:
+                    disp = str(det["class"])
+                    if which == "targets":
+                        if self.all_targets_world_dict[key]["disp_name"] is None:
+                            self.all_targets_world_dict[key]["disp_name"] = disp
+                        self.all_targets_world_dict[key]["x"] = float(dpos[0])
+                        self.all_targets_world_dict[key]["y"] = float(dpos[1])
+                    else:  # obstacles
+                        self.all_obstacles_world_dict[key]["disp_name"] = disp
+                        self.all_obstacles_world_dict[key]["x"] = float(dpos[0])
+                        self.all_obstacles_world_dict[key]["y"] = float(dpos[1])
 
         # 4) (Optional) publish detections to the world model for GUI
         try:
@@ -617,6 +634,35 @@ class RunnerFinal(threading.Thread):
         except Exception as e:
             log.debug("Dynamic layer update skipped: %s", e)
 
+    def _shopping_list_complete(self) -> bool:
+        # Build required counts from shopping_list
+        need = Counter(self.shopping_list or [])
+        if not need:
+            return False  # no shopping list to satisfy
+        # What we have classified so far
+        have = Counter()
+        for info in self.target_positions.values():
+            c = info.get("class")
+            if c:
+                have[c.split("_")[0]] += 1
+        # Complete when for every wanted class we have at least that many classified
+        return all(have[k] >= v for k, v in need.items())
+
+    def _all_classified(self) -> bool:
+        return all(info.get("class") is not None for info in self.target_positions.values())
+
+    def _all_collected_in_order(self, target_order: list[int], collected_ids: set[str]) -> bool:
+        return all(str(tid) in collected_ids for tid in target_order)
+
+    def _next_known_targets(self, target_order: list[int], collected_ids: set[str]) -> int | None:
+        # First id in order not yet collected and with a known position
+        for tid in self.target_order:
+            if str(tid) not in collected_ids:
+                info = self.target_positions.get(tid, {})
+                if info.get("pos") is not None:
+                    return tid
+        return None
+
     # ---------------- Main loop ----------------
     def run(self):
         log.info("FinalDemo Runner starting!")
@@ -624,9 +670,48 @@ class RunnerFinal(threading.Thread):
         # Allow the robot to go anywhere (no dark zones)
         self.grid.mark_all_safe()
 
-        # Extract Target Order
-        target_order = [key for key in self.target_positions.keys()]
-        target_order.sort()
+        # Set Target Order
+        # First see if we have classes assigned
+        all_targets = [key for key in self.target_positions.keys()]
+        target_order = []
+        for want in self.shopping_list:
+            for tid, info in self.target_positions.items():
+                if info.get("class").split("_")[0] == want and tid in all_targets:
+                    target_order.append(tid)
+                    break
+        # Check if we added any targets. If not, just add all targets in order
+        if not target_order:
+            target_order = all_targets.copy()
+            target_order.sort()
+            self._target_mode = 'CHECK_ALL'
+
+        print(target_order)
+        total_targets = len(target_order)
+
+        # Collate all the obstacles into two dictionaries
+        # self.all_targets_world_dict contains all the targets
+        self.all_targets_world_dict = {
+            tid: {
+                "disp_name": info.get("class").split("_")[0] if info.get("class") is not None else None,
+                "x": float(info["pos"][0]),
+                "y": float(info["pos"][1])
+            }
+            for tid, info in self.target_positions.items()
+            if tid in target_order
+        }
+        # self.all_obstacles_world_dict contains any fruit that isn't a target
+        self.all_obstacles_world_dict = {
+            tid: {
+                "disp_name": info.get("class").split("_")[0] if info.get("class") is not None else None,
+                "x": float(info["pos"][0]),
+                "y": float(info["pos"][1])
+            }
+            for tid, info in self.target_positions.items()
+            if tid not in target_order
+        }
+
+        # Create a list of collected targets
+        collected_targets = []
 
         # Append known targets to dynamic exclusion map
         try:
@@ -644,78 +729,107 @@ class RunnerFinal(threading.Thread):
             remaining = positions.copy()
 
             # Set the targets info in the world model
-            self.world.set_targets_info(order=target_order,
-                                        remaining=remaining,
-                                        collected=[],
-                                        seen_not_collected=list(remaining.keys()),
-                                        unseen=[n for n in target_order if n not in remaining],
-                                        active=None,
-                                        positions=positions)
+            self.world.set_targets_info(
+                targets = self.all_targets_world_dict,
+                active = -1,
+                collected = collected_targets
+            )
             # Initial status
             self.world.set_status(mode='AUTO', sm_state='FinalDemo', action='init', progress=f"0/{total_targets}")
         except Exception:
             pass
         
-        # Continue processing until all targets are classified
-        total_targets = len(self.target_positions)
-        while any(info.get("class") is None for info in self.target_positions.values()):
-            # 1) Choose closest unclassified target
-            wx, wy, _ = self.get_pose_fn()
+        # -- Main loop
+        # if self._target_mode == 'KNOWN_TARGETS' --> go in order of target_order until all collected
+        # if self._target_mode == 'CHECK_ALL' --> go in order of target_order until all classified OR shopping list complete
 
-            unclassified = [
-                (tid, info) for tid, info in self.target_positions.items()
-                if info.get("class") is None and info.get("pos") is not None
-            ]
-            if not unclassified:
-                log.warning("No unclassified targets with known positions; stopping.")
-                break
+        # For each target in target_order
+        for target_index in target_order:
+            current_target_index = -1
+            # If we are in CHECK_ALL
+            if self._target_mode == 'CHECK_ALL':
+                # 1) Choose closest unclassified target
+                wx, wy, _ = self.get_pose_fn()
 
-            def sqdist(p):
-                dx, dy = p[0] - wx, p[1] - wy
-                return dx*dx + dy*dy
+                unclassified = [
+                    (tid, info) for tid, info in self.target_positions.items()
+                    if info.get("class") is None and info.get("pos") is not None
+                ]
+                if not unclassified:
+                    log.warning("No unclassified targets with known positions; stopping.")
+                    break
 
-            # tie-break by tid for determinism
-            idx, info = min(unclassified, key=lambda kv: (sqdist(kv[1]["pos"]), kv[0]))
-            txy = (float(info["pos"][0]), float(info["pos"][1]))
-            name = str(idx)
+                def sqdist(p):
+                    dx, dy = p[0] - wx, p[1] - wy
+                    return dx*dx + dy*dy
 
-            classified = sum(1 for v in self.target_positions.values() if v.get("class") is not None)
-            progress_str = f"{classified + 1}/{total_targets}"
+                # tie-break by tid for determinism
+                idx, info = min(unclassified, key=lambda kv: (sqdist(kv[1]["pos"]), kv[0]))
+                txy = (float(info["pos"][0]), float(info["pos"][1]))
+                name = str(idx)
+                current_target_index = idx
 
-            if self._stop.is_set():
-                break
+                # Create progress string
+                progress_str = f"{len(collected_targets) + 1}/{total_targets}"
 
-            # 2) Mark this as the active target in the world model
-            try:
-                wm = self.world.get_targets_info()
-                self.world.set_targets_info(
-                    order=wm.get('order', []),
-                    remaining=wm.get('remaining', {}),
-                    collected=wm.get('collected', []),
-                    seen_not_collected=wm.get('seen_not_collected', []),
-                    unseen=wm.get('unseen', []),
-                    active=name,
-                    positions=wm.get('positions', {})
-                )
-                self.world.set_status(mode='AUTO', sm_state='FinalDemo', action='scan',
-                                    target=name, progress=progress_str)
-            except Exception:
-                pass
+                if self._stop.is_set():
+                    break
 
-            log.info("🎯 Heading to closest unclassified target id=%d: %s at (%.2f, %.2f) [%s]",
-                    idx, name, txy[0], txy[1], progress_str)
+                # 2) Mark this as the active target in the world model
+                try:
+                    wm = self.world.get_targets_info()
+                    self.world.set_targets_info(
+                        targets=self.all_targets_world_dict,
+                        active=idx,
+                        collected=collected_targets
+                    )
+                    self.world.set_status(mode='AUTO', sm_state='FinalDemo', action='scan',
+                                        target=name, progress=progress_str)
+                except Exception:
+                    pass
+
+                log.info("🎯 Heading to closest unclassified target id=%d: %s at (%.2f, %.2f) [%s]",
+                        idx, name, txy[0], txy[1], progress_str)
             
+            # Otherwise we know the target order so we know where we need to go to next
+            if self._target_mode == 'KNOWN_TARGETS':
+                # Get the location and class of the current target
+                current_target = self.all_targets_world_dict[target_index]
+                txy = (current_target.get("x"), current_target.get("y"))
+                name = current_target.get("disp_name") if current_target.get("disp_name") is not None else str(target_index)
+                current_target_index = target_index
+
+                progress_str = f"{len(collected_targets) + 1}/{total_targets}"
+
+                # Set gui status
+                try:
+                    wm = self.world.get_targets_info()
+                    self.world.set_targets_info(
+                        targets=self.all_targets_world_dict,
+                        active=target_index,
+                        collected=collected_targets
+                    )
+                    self.world.set_status(mode='AUTO', sm_state='FinalDemo', action='scan',
+                                        target=name, progress=progress_str)
+                except Exception:
+                    pass
+
+                # Set status
+                log.info("🎯 Heading to known target id=%d: %s at (%.2f, %.2f) [%s]",
+                        target_index, name, txy[0], txy[1], progress_str)
 
             attempt = 0
             while not self._stop.is_set():
                 # 1) Scan
                 log.info("Starting scan before approaching %s (attempt %d)", name, attempt + 1)
                 self.world.set_status(mode='AUTO', sm_state='FinalDemo', action='scan', target=name,
-                                       progress=f"{idx+1}/{total_targets}")
+                                       progress=progress_str)
                 self._scan_and_update()
 
                 # Refresh target coords in case the scan updated them
-                new_txy = tuple(self.target_positions[idx]["pos"])
+                current_target = self.all_targets_world_dict[current_target_index]
+                new_txy = (current_target.get("x"), current_target.get("y"))
+                print(current_target)
                 if self._dist(txy, new_txy) > 0.03:  # 3 cm hysteresis to avoid thrashing
                     log.info("Target %s moved from (%.2f, %.2f) to (%.2f, %.2f); replanning",
                             str(idx), txy[0], txy[1], new_txy[0], new_txy[1])
@@ -730,25 +844,15 @@ class RunnerFinal(threading.Thread):
                     time.sleep(2.0)
                     # Update targets info: mark as collected
                     try:
-                        info = self.world.get_targets_info()
-                        remaining = dict(info.get('remaining', {}))
-                        if name in remaining:
-                            del remaining[name]
-                        collected = list(info.get('collected', []))
-                        if name not in collected:
-                            collected.append(name)
-                        order = list(info.get('order', []))
-                        seen = [n for n in remaining.keys()]
-                        unseen = [n for n in order if (n not in remaining) and (n not in collected)]
-                        self.world.set_targets_info(order=order,
-                                                    remaining=remaining,
-                                                    collected=collected,
-                                                    seen_not_collected=seen,
-                                                    unseen=unseen,
-                                                    active=None,
-                                                    positions=info.get('positions', {}))
+                        wm = self.world.get_targets_info()
+                        collected_targets.append(current_target_index)
+                        self.world.set_targets_info(
+                            targets=self.all_targets_world_dict,
+                            active=-1,
+                            collected=collected_targets
+                        )
                         self.world.set_status(mode='AUTO', sm_state='FinalDemo', action='reached', target=name,
-                                               progress=f"{idx+1}/{total_targets}")
+                                               progress=progress_str)
                     except Exception:
                         pass
                     break  # next target
@@ -758,7 +862,7 @@ class RunnerFinal(threading.Thread):
                 if not planned:
                     log.info("No path found yet towards %s; rescanning", name)
                     self.world.set_status(mode='AUTO', sm_state='FinalDemo', action='replan', target=name,
-                                           progress=f"{idx+1}/{total_targets}")
+                                           progress=progress_str)
                     time.sleep(0.5)
                     attempt += 1
                     continue
@@ -784,27 +888,18 @@ class RunnerFinal(threading.Thread):
                         self._plan_waypoints = []
                         # mirror collection update here to avoid re-scanning and double-reporting
                         try:
-                            info = self.world.get_targets_info()
-                            remaining = dict(info.get('remaining', {}))
-                            if name in remaining:
-                                del remaining[name]
-                            collected = list(info.get('collected', []))
-                            if name not in collected:
-                                collected.append(name)
-                            order = list(info.get('order', []))
-                            seen = [n for n in remaining.keys()]
-                            unseen = [n for n in order if (n not in remaining) and (n not in collected)]
-                            self.world.set_targets_info(order=order,
-                                                        remaining=remaining,
-                                                        collected=collected,
-                                                        seen_not_collected=seen,
-                                                        unseen=unseen,
-                                                        active=None,
-                                                        positions=info.get('positions', {}))
+                            wm = self.world.get_targets_info()
+                            collected_targets.append(current_target_index)
+                            self.world.set_targets_info(
+                                targets=self.all_targets_world_dict,
+                                active=-1,
+                                collected=collected_targets
+                            )
                             self.world.set_status(mode='AUTO', sm_state='FinalDemo', action='reached', target=name,
-                                                   progress=f"{idx+1}/{total_targets}")
+                                                progress=progress_str)
                         except Exception:
                             pass
+
                         done_this_target = True
                         break
                     dt = time.time() - t0
