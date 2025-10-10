@@ -420,6 +420,7 @@ def _parse_args():
     parser.add_argument("--update_targets", type=bool, default=True, help='Whether to update target positions from live detections')
     parser.add_argument("--obstacle_size_large", type=float, default=0.08, help='Size of un-updated obstacles (m)')
     parser.add_argument("--obstacle_size_small", type=float, default=0.06, help='Size of updated obstacles (m)')
+    parser.add_argument("--inflation_margin", type=float, default=0.05, help='Exclusion zone inflation margin (m)')
     # Pose smoothing (control/GUI)
     parser.add_argument("--pose_smoothing", action='store_true', help='Enable EMA + rate-limited smoothed pose for control/GUI')
     parser.add_argument("--pose_alpha_pos", type=float, default=0.2, help='EMA alpha for x/y')
@@ -502,9 +503,9 @@ def _load_map_and_shopping(args):
 
 
 
-def _build_grid_from_aruco(aruco_true_pos: np.ndarray) -> GridMap:
+def _build_grid_from_aruco(args, aruco_true_pos: np.ndarray) -> GridMap:
     grid = GridMap(res=0.02, margin=0.0, robot_radius=0.09,
-                   inflation_margin=0.05, boundary_margin=0.01,
+                   inflation_margin=args.inflation_margin, boundary_margin=0.01,
                    arena_bounds_wm=(-1.4, -1.4, 1.4, 1.4))
     grid.build_from_aruco(aruco_true_pos)
     log.info("[WM] Occupancy grid built: size=%s res=%.3f m", str(grid.size), grid.res)
@@ -638,7 +639,7 @@ def main():
     aruco_true_pos, aruco_true_pos_id, shopping_list, known_targets = _load_map_and_shopping(args)
 
     # 3) Occupancy grid
-    gridMapInstance = _build_grid_from_aruco(aruco_true_pos)
+    gridMapInstance = _build_grid_from_aruco(args, aruco_true_pos)
 
     # 4) EKF + ArUco
     ekfInstance, aruco_det = _init_ekf_and_aruco(args)

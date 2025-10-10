@@ -597,40 +597,42 @@ class RunnerFinal(threading.Thread):
                 continue
 
         # 3) For each detection, identify the closest object (targets + obstacles) and update its entry
-        if (self.all_targets_world_dict or self.all_obstacles_world_dict) and close_dets and self.update_targets:
-            def _iter_entries():
-                # tag which dict each entry comes from so we can update the right one
-                for k, v in self.all_targets_world_dict.items():
-                    yield ("targets", k, v)
-                for k, v in self.all_obstacles_world_dict.items():
-                    yield ("obstacles", k, v)
+        if self.update_targets:
+            if (self.all_targets_world_dict or self.all_obstacles_world_dict) and close_dets:
+                def _iter_entries():
+                    # tag which dict each entry comes from so we can update the right one
+                    for k, v in self.all_targets_world_dict.items():
+                        yield ("targets", k, v)
+                    for k, v in self.all_obstacles_world_dict.items():
+                        yield ("obstacles", k, v)
 
-            for det in close_dets:
-                dpos = det["position"]  # (wx, wy)
-                try:
-                    which, key, entry = min(
-                        _iter_entries(),
-                        key=lambda t: self._dist((float(t[2]["x"]), float(t[2]["y"])), dpos)
-                    )
-                except ValueError:
-                    # both dicts empty
-                    break
+                for det in close_dets:
+                    dpos = det["position"]  # (wx, wy)
+                    try:
+                        which, key, entry = min(
+                            _iter_entries(),
+                            key=lambda t: self._dist((float(t[2]["x"]), float(t[2]["y"])), dpos)
+                        )
+                    except ValueError:
+                        # both dicts empty
+                        break
 
-                ex, ey = float(entry["x"]), float(entry["y"])
-                if self._dist((ex, ey), dpos) <= ASSIGN_THRESH_M:
-                    disp = str(det["class"])
-                    if which == "targets":
-                        if self.all_targets_world_dict[key]["disp_name"] is None:
-                            self.all_targets_world_dict[key]["disp_name"] = disp
-                        self.all_targets_world_dict[key]["x"] = float(dpos[0])
-                        self.all_targets_world_dict[key]["y"] = float(dpos[1])
-                        self.all_targets_world_dict[key]["updated_by_scan"] = True
-                    else:  # obstacles
-                        self.all_obstacles_world_dict[key]["disp_name"] = disp
-                        self.all_obstacles_world_dict[key]["x"] = float(dpos[0])
-                        self.all_obstacles_world_dict[key]["y"] = float(dpos[1])
-                        self.all_obstacles_world_dict[key]["updated_by_scan"] = True
-
+                    ex, ey = float(entry["x"]), float(entry["y"])
+                    if self._dist((ex, ey), dpos) <= ASSIGN_THRESH_M:
+                        disp = str(det["class"])
+                        if which == "targets":
+                            if self.all_targets_world_dict[key]["disp_name"] is None:
+                                self.all_targets_world_dict[key]["disp_name"] = disp
+                            self.all_targets_world_dict[key]["x"] = float(dpos[0])
+                            self.all_targets_world_dict[key]["y"] = float(dpos[1])
+                            self.all_targets_world_dict[key]["updated_by_scan"] = True
+                        else:  # obstacles
+                            self.all_obstacles_world_dict[key]["disp_name"] = disp
+                            self.all_obstacles_world_dict[key]["x"] = float(dpos[0])
+                            self.all_obstacles_world_dict[key]["y"] = float(dpos[1])
+                            self.all_obstacles_world_dict[key]["updated_by_scan"] = True
+        else:
+            log.info("Skipping target/obstacle updates from detections due to config")
         # 4) (Optional) publish detections to the world model for GUI
         try:
             self.world.set_detections(close_dets)
@@ -675,6 +677,7 @@ class RunnerFinal(threading.Thread):
     # ---------------- Main loop ----------------
     def run(self):
         log.info("FinalDemo Runner starting!")
+        log.info(f"self.update_targets = {self.update_targets}")
 
         # Allow the robot to go anywhere (no dark zones)
         self.grid.mark_all_safe()
