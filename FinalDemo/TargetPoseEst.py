@@ -340,6 +340,9 @@ def estimate_pose(camera_matrix, obj_info, robot_pose):
 
 
 def merge_estimations(target_pose_dict, eps=0.15, min_samples=2):
+
+    print("Using clustering distance of: " + str(eps) + "m")
+
     """
     function:
         merge estimations of the same target
@@ -406,6 +409,14 @@ if __name__ == "__main__":
                         help='Path to SLAM map JSON (default: lab_output/slam.txt if exists)')
     parser.add_argument('--no_plot', action='store_true', help='Disable plotting of markers/targets')
     args, _ = parser.parse_known_args()
+
+    # Adding clustering distance (cm)
+    parser.add_argument('-dist', type=float, default=0.15,
+                        help='Clustering distance in m (default: 15)')
+    args, _ = parser.parse_known_args()
+
+    clustering_distance = args.dist
+
 
     script_dir = os.path.dirname(os.path.abspath(__file__))     # get current script directory (TargetPoseEst.py)
 
@@ -493,7 +504,7 @@ if __name__ == "__main__":
 
     # merge the estimations of the targets so that there are at most 3 estimations of each target type
     target_est = {}
-    target_est = merge_estimations(target_pose_dict, min_samples=3)
+    target_est = merge_estimations(target_pose_dict, eps=clustering_distance, min_samples=3)
     print(target_est)
     # save target pose estimations
     with open(f'{script_dir}/lab_output/targets.txt', 'w') as fo:

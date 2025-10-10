@@ -1,4 +1,0 @@
-
-
-python3 auto_fruit_search.py --level 3 --map james_house_l3_map.txt --shopping_list M3_prac_shopping_list.txt --calib_dir calibration/param/ --ip 192.168.50.1 --controller ttg --model models/PiBotAiMk2_V5.pt --interactive_gui --pose_smoothing
-
