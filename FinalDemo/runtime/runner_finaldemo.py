@@ -834,7 +834,7 @@ class RunnerFinal(threading.Thread):
                 print(current_target)
                 if self._dist(txy, new_txy) > 0.03:  # 3 cm hysteresis to avoid thrashing
                     log.info("Target %s moved from (%.2f, %.2f) to (%.2f, %.2f); replanning",
-                            str(idx), txy[0], txy[1], new_txy[0], new_txy[1])
+                            str(current_target_index), txy[0], txy[1], new_txy[0], new_txy[1])
                     txy = new_txy
                     self._goal = txy
 
