@@ -72,6 +72,8 @@ class Operate:
         self.aruco_det = aruco.aruco_detector(self.ekf.robot, marker_length=0.07, cube_depth=0.08)
         self.ekf_last_time = time.monotonic()
 
+        self.velocity_mode = 'measured'
+
         # Joint (bundle) optimisation support
         self.joint_optimiser = JointOptimiser2D()
         self._joint_opt_frame_counter = 0
@@ -172,6 +174,8 @@ class Operate:
     # SLAM with ARUCO markers       
     def update_slam(self,drive_meas_ctrl):
         lms, self.aruco_img = self.aruco_det.detect_marker_positions(self.img)
+
+        # If requested to recover robot pose after pause
         if self.request_recover_robot:
             is_success = self.ekf.recover_from_pause(lms)
             if is_success:
@@ -181,19 +185,20 @@ class Operate:
                 self.notification = 'Recover failed, need >2 landmarks!'
                 self.ekf_on = False
             self.request_recover_robot = False
+        
+        # If SLAM is running
         elif self.ekf_on:
-            '''
-            # Get time
-            time_now = time.monotonic()
-            dt = time_now - self.ekf_last_time
-            l_vel, r_vel = self.pibot.get_wheel_velocity(prefer_measured=True)
-            print(f"Time: {time_now} -> {l_vel}, {r_vel}")
-            self.ekf_last_time = time_now
-            drive_meas = measure.Drive(l_vel, r_vel, dt, left_cov=self.left_wheel_cov, right_cov=self.right_wheel_cov)
-            '''
-            l_vel, r_vel, dt = self.pibot.get_wheel_velocity_diff()
-            drive_meas = measure.Drive(l_vel, -r_vel, dt, left_cov=self.left_wheel_cov, right_cov=self.right_wheel_cov)
-            # print(f"{time.monotonic()} -> dt: {dt:.2f} w./ {l_vel:.2f}, {r_vel:.2f}")
+            # Try to use the measured velocity first if enabled
+            if self.velocity_mode == 'measured':
+                try:
+                    l_vel, r_vel, dt = self.pibot.get_wheel_velocity_diff()
+                    drive_meas = measure.Drive(l_vel, -r_vel, dt, left_cov=self.left_wheel_cov, right_cov=self.right_wheel_cov)
+                except:
+                    drive_meas = drive_meas_ctrl
+                    self.velocity_mode = 'commanded'
+                    log.warning("[SLAM] Wheel velocity read failed, switching to commanded velocity for rest of session")
+            else:
+                drive_meas = drive_meas_ctrl
             
             motion_type = self.ekf.predict(drive_meas)
             self.ekf.add_landmarks(lms)
