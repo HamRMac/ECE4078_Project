@@ -404,6 +404,16 @@ class LiveTargetEstimator(threading.Thread):
 # Structured entrypoint helpers
 # -------------------------------
 
+def str2bool(v):
+    if isinstance(v, bool):
+        return v
+    if v.lower() in ('yes', 'true', 't', '1'):
+        return True
+    elif v.lower() in ('no', 'false', 'f', '0'):
+        return False
+    else:
+        raise argparse.ArgumentTypeError('Boolean value expected.')
+
 def _parse_args():
     parser = argparse.ArgumentParser("Fruit searching")
     # For Level 3, default to the L3 map; only accept levels 3 or 4
@@ -417,7 +427,7 @@ def _parse_args():
     parser.add_argument("--log", type=str, default='INFO', choices=['DEBUG','INFO','WARNING','ERROR','CRITICAL'], help='Logging level')
     parser.add_argument("--model", type=str, default='models/PiBotAiMk2_V5.pt', help='YOLO model path (optional)')
     parser.add_argument("--use_fusion", action='store_true', help='Fuse bbox-height with bottom-pixel ground-ray for fruit range')
-    parser.add_argument("--update_targets", type=bool, default=True, help='Whether to update target positions from live detections')
+    parser.add_argument("--update_targets", type=str2bool, nargs='?', const=True, default=True, help="Whether to update target positions from live detections")
     parser.add_argument("--obstacle_size_large", type=float, default=0.08, help='Size of un-updated obstacles (m)')
     parser.add_argument("--obstacle_size_small", type=float, default=0.06, help='Size of updated obstacles (m)')
     parser.add_argument("--inflation_margin", type=float, default=0.05, help='Exclusion zone inflation margin (m)')
