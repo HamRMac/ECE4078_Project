@@ -211,6 +211,7 @@ class PenguinPi:
         return float(vel[0]), float(vel[1]), dt
 
     def _encoder_poll_loop(self, rate_hz: float) -> None:
+        log.info("Starting encoder polling at %.1f Hz", rate_hz)
         period = 1.0 / max(1e-3, rate_hz)
         session = requests.Session()
         prev_counts: Optional[np.ndarray] = None
@@ -227,6 +228,7 @@ class PenguinPi:
                     # Stop using measured velocity if there is an error
                     self._vel_polling_mode = 'commanded'
                     log.info("Switching to commanded velocity mode for remainder of session.")
+                    self.stop_encoder_monitor()
 
                 prev_counts = None
                 prev_stamp = None
@@ -252,6 +254,7 @@ class PenguinPi:
             wait_time = max(0.0, period - elapsed)
             if self._encoder_stop.wait(wait_time):
                 break
+        log.info("Encoder polling thread exiting")
 
     def _apply_body_frame_counts(self, counts: np.ndarray) -> np.ndarray:
         left = float(counts[0])
