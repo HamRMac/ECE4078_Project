@@ -66,21 +66,17 @@ class Detector:
                 if idx == max_size_idx:
                     # Plot the biggest box with its original color
                     img_out = cv2.rectangle(img_out, (x1, y1), (x2, y2), self.class_colour[bbox[0]], thickness=2)
+                    img_out = cv2.putText(img_out, bbox[0], (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5,
+                                  self.class_colour[bbox[0]], 2)
                 else:
                     # Plot the other boxes in grey
                     img_out = cv2.rectangle(img_out, (x1, y1), (x2, y2), (200, 200, 200), thickness=2)
+
             else:
                 # draw bounding box
                 img_out = cv2.rectangle(img_out, (x1, y1), (x2, y2), self.class_colour[bbox[0]], thickness=2)
                 # draw class label
                 img_out = cv2.putText(img_out, bbox[0], (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5,
-                                  self.class_colour[bbox[0]], 2)
-
-            # draw bounding box
-            img_out = cv2.rectangle(img_out, (x1, y1), (x2, y2), self.class_colour[bbox[0]], thickness=2)
-
-            # draw class label
-            img_out = cv2.putText(img_out, bbox[0], (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5,
                                   self.class_colour[bbox[0]], 2)
 
         if self.get_biggest_only:
