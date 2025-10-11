@@ -76,7 +76,7 @@ class FruitRanger:
             return None
 
         # range from height prior
-        r = (true_height_m / h) * f
+        r = (true_height_m / h) * f  - cam_dist_from_centre
 
         # centroid location
         x_c = x + w / 2.0
@@ -94,7 +94,7 @@ class FruitRanger:
         y_cam = float(r * np.sin(theta))
 
         return {
-            'r': float(r - cam_dist_from_centre),
+            'r': float(r),
             'theta': float(theta),
             'sigma_r': sigma_r,
             'sigma_theta': sigma_theta,
