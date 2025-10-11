@@ -94,7 +94,7 @@ class FruitRanger:
         y_cam = float(r * np.sin(theta))
 
         return {
-            'r': float(r + cam_dist_from_centre),
+            'r': float(r - cam_dist_from_centre),
             'theta': float(theta),
             'sigma_r': sigma_r,
             'sigma_theta': sigma_theta,
