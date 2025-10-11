@@ -71,7 +71,7 @@ class FruitRanger:
         Returns: {'r','theta','sigma_r','sigma_theta','x','y'} in camera frame.
         """
 
-        cam_dist_from_centre = 0.01 # Distance of camera from centre of robot
+        cam_dist_from_centre = 0.03 # Distance of camera from centre of robot
 
         if self.camera_matrix is None or true_height_m <= 0:
             log.warning("from_bbox_height: Invalid camera parameters or true height.")
@@ -89,7 +89,7 @@ class FruitRanger:
         cx = float(self.camera_matrix[0, 2]) if self.camera_matrix.shape[1] >= 3 else 160.0
 
         # Similar triangles range estimate along optical axis
-        r = (true_height_m / h) * f  - cam_dist_from_centre
+        r = (true_height_m / h) * f  + cam_dist_from_centre
 
         # Bearing in camera frame; positive when bbox centre is left of principal point
         x_c = x + w / 2.0
