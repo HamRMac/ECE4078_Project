@@ -155,7 +155,7 @@ class Operate:
         if args.play_data:
             lv, rv = self.pibot.set_velocity()
         else:
-            lv, rv = self.pibot.set_velocity(self.command['motion'])
+            lv, rv = self.pibot.set_velocity(self.command['motion'], tick=100)
         if self.data is not None:
             self.data.write_keyboard(lv, rv)
         dt = time.time() - self.control_clock
