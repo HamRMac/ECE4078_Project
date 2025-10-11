@@ -70,6 +70,9 @@ class FruitRanger:
         bbox is [x, y, w, h] in pixels (top-left origin).
         Returns: {'r','theta','sigma_r','sigma_theta','x','y'} in camera frame.
         """
+
+        cam_dist_from_centre = 0.01 # Distance of camera from centre of robot
+
         if self.camera_matrix is None or true_height_m <= 0:
             log.warning("from_bbox_height: Invalid camera parameters or true height.")
             return None
@@ -103,7 +106,7 @@ class FruitRanger:
         y_cam = float(r * np.sin(theta))
 
         return {
-            'r': r, 'theta': theta,
+            'r': r - cam_dist_from_centre, 'theta': theta,
             'sigma_r': sigma_r, 'sigma_theta': sigma_theta,
             'x': x_cam, 'y': y_cam
         }
