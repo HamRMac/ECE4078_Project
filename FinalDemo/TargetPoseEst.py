@@ -60,6 +60,8 @@ class FruitRanger:
         Returns dict with keys: r, theta, sigma_r, sigma_theta, x, y (camera frame)
         or None if invalid inputs.
         """
+        cam_dist_from_centre = 0.02 # Distance of camera from centre of robot
+
         if camera_matrix is None:
             return None
         try:
@@ -92,7 +94,7 @@ class FruitRanger:
         y_cam = float(r * np.sin(theta))
 
         return {
-            'r': float(r),
+            'r': float(r + cam_dist_from_centre),
             'theta': float(theta),
             'sigma_r': sigma_r,
             'sigma_theta': sigma_theta,
