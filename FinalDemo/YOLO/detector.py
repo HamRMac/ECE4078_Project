@@ -5,7 +5,6 @@ from copy import deepcopy
 from ultralytics import YOLO
 from ultralytics.utils import ops
 
-
 class Detector:
     def __init__(self,
                  model_path: str = "",
@@ -42,10 +41,8 @@ class Detector:
 
         img_out = deepcopy(img)
 
-        items = self._edge_clipping(img_out, bboxes)
-
         # draw bounding boxes on the image
-        for bbox in items:
+        for bbox in bboxes:
             #  translate bounding box info back to the format of [x1,y1,x2,y2]
             xyxy = ops.xywh2xyxy(bbox[1])
             x1 = int(xyxy[0])
@@ -147,7 +144,7 @@ class Detector:
                 })
 
         # Horizon clipping: drop boxes whose bottom lies in the top half of the image
-        items = self._edge_clipping(img_out, items)
+        items = self._edge_clipping(cv_img, items)
 
         # Suppress overlapping boxes (keep highest-confidence)
         kept = self._suppress_overlaps(items, self.overlap_iou_thresh)
@@ -186,7 +183,7 @@ class Detector:
             H = 0
             W = 0
         
-        clipped = []
+        ok_images = []
         if H > 0 and W > 0:
             half = H * 0.5
             for it in bounding_boxes:
@@ -194,15 +191,13 @@ class Detector:
                 left = cx - 0.5 * w
                 right = cx + 0.5 * w
                 bottom = cy + 0.5 * h
-                if bottom >= half:
-                    clipped.append(it)  
-                elif left <= 0 + margin:
-                    clipped.append(it)
-                elif right >= W - margin:
-                    clipped.append(it)
+                # Note the increasing y axis is downwards in image coords
+                # Condition is bottom of box is in lower half of image and image not too close to left/right edge
+                if bottom >= half and left >= 0 + margin and right <= W - margin:
+                    ok_images.append(it)
         
         # Return the clipped boxes
-        return clipped
+        return ok_images
 
     @staticmethod
     def _iou_xywh(a, b):
