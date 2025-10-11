@@ -178,7 +178,7 @@ class Detector:
                 kept.append(cand)
         return kept
     
-    def _edge_clipping(self,img,bounding_boxes):
+    def _edge_clipping(self,img,bounding_boxes, margin=0):
         try:
             H = int(img.shape[0])
             W = int(img.shape[1])
@@ -196,9 +196,9 @@ class Detector:
                 bottom = cy + 0.5 * h
                 if bottom >= half:
                     clipped.append(it)  
-                elif left <= 0:
+                elif left <= 0 + margin:
                     clipped.append(it)
-                elif right >= W:
+                elif right >= W - margin:
                     clipped.append(it)
         
         # Return the clipped boxes
