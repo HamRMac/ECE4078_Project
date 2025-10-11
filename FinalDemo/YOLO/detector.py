@@ -5,16 +5,24 @@ from copy import deepcopy
 from ultralytics import YOLO
 from ultralytics.utils import ops
 
+import logging
+log = logging.getLogger(__name__)
+
 class Detector:
     def __init__(self,
                  model_path: str = "",
-                 imgsz: int = 320
+                 imgsz: int = 320,
+                 get_biggest_only: bool = False
                  ):
         self.model = YOLO(model_path)
         self.imgsz = int(imgsz)
         self.max_batch = 8
         # IoU threshold for suppressing overlapping boxes: keep highest-confidence
         self.overlap_iou_thresh = 0.5
+        self.get_biggest_only = get_biggest_only  # If True, keep only biggest box (after horizon clipping)
+
+        if self.get_biggest_only:
+            log.info(f"Note that the detector is only operating in get_biggest_only mode.")
 
         self.class_colour = {
             'orange': (0, 165, 255),
@@ -41,14 +49,32 @@ class Detector:
 
         img_out = deepcopy(img)
 
+        sizes = [bbox[1][2] * bbox[1][3] for bbox in bboxes]
+        max_size_idx = np.argmax(sizes) if sizes else -1
+
         # draw bounding boxes on the image
-        for bbox in bboxes:
+        for idx, bbox in enumerate(bboxes):
             #  translate bounding box info back to the format of [x1,y1,x2,y2]
-            xyxy = ops.xywh2xyxy(bbox[1])
+            xywh = bbox[1]
+            xyxy = ops.xywh2xyxy(xywh)
             x1 = int(xyxy[0])
             y1 = int(xyxy[1])
             x2 = int(xyxy[2])
             y2 = int(xyxy[3])
+
+            if self.get_biggest_only:
+                if idx == max_size_idx:
+                    # Plot the biggest box with its original color
+                    img_out = cv2.rectangle(img_out, (x1, y1), (x2, y2), self.class_colour[bbox[0]], thickness=2)
+                else:
+                    # Plot the other boxes in grey
+                    img_out = cv2.rectangle(img_out, (x1, y1), (x2, y2), (200, 200, 200), thickness=2)
+            else:
+                # draw bounding box
+                img_out = cv2.rectangle(img_out, (x1, y1), (x2, y2), self.class_colour[bbox[0]], thickness=2)
+                # draw class label
+                img_out = cv2.putText(img_out, bbox[0], (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5,
+                                  self.class_colour[bbox[0]], 2)
 
             # draw bounding box
             img_out = cv2.rectangle(img_out, (x1, y1), (x2, y2), self.class_colour[bbox[0]], thickness=2)
@@ -56,6 +82,10 @@ class Detector:
             # draw class label
             img_out = cv2.putText(img_out, bbox[0], (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5,
                                   self.class_colour[bbox[0]], 2)
+
+        if self.get_biggest_only:
+            # Keep only the biggest box
+            bboxes = [bboxes[max_size_idx]] if max_size_idx >= 0 else []
 
         return bboxes, img_out
 
@@ -103,13 +133,22 @@ class Detector:
 
                 # Prepare outputs and draw
                 boxes_out = []
-                for it in kept:
+                sizes = [(it['xywh'][2] * it['xywh'][3]) for it in kept]
+                max_size_idx = int(np.argmax(sizes)) if sizes else -1
+
+                for idx, it in enumerate(kept):
                     boxes_out.append([it['label'], it['xywh']])
                     xyxy = ops.xywh2xyxy(it['xywh'])
                     x1, y1, x2, y2 = map(int, [xyxy[0], xyxy[1], xyxy[2], xyxy[3]])
-                    colour = self.class_colour.get(it['label'], (200, 200, 200))
-                    img_out = cv2.rectangle(img_out, (x1, y1), (x2, y2), colour, thickness=2)
-                    img_out = cv2.putText(img_out, it['label'], (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, colour, 2)
+                    base_colour = self.class_colour.get(it['label'], (200, 200, 200))
+                    draw_colour = base_colour
+                    if self.get_biggest_only and idx != max_size_idx:
+                        draw_colour = (200, 200, 200)
+                    img_out = cv2.rectangle(img_out, (x1, y1), (x2, y2), draw_colour, thickness=2)
+                    img_out = cv2.putText(img_out, it['label'], (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, base_colour, 2)
+
+                if self.get_biggest_only:
+                    boxes_out = [boxes_out[max_size_idx]] if max_size_idx >= 0 else []
 
                 results_all.append((boxes_out, img_out))
         return results_all

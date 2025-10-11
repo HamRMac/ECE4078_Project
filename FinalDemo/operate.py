@@ -133,7 +133,7 @@ class Operate:
             self.detector = None
             self.yolo_vis = cv2.imread('pics/8bit/detector_splash.png')
         else:
-            self.detector = Detector(args.yolo_model)
+            self.detector = Detector(model_path=args.yolo_model, get_biggest_only=True)
             self.yolo_vis = np.ones((240, 320, 3)) * 100
         self.bg = pygame.image.load('pics/gui_mask.jpg')
 
