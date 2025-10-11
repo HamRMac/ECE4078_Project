@@ -429,7 +429,7 @@ if __name__ == "__main__":
     # init YOLO model
     model_path = f'{script_dir}/YOLO/model/V5.pt'
     print(f'>> Loading YOLO model from {model_path}')
-    yolo = Detector(model_path)
+    yolo = Detector(model_path=model_path, get_biggest_only=True)
 
     # instantiate ranger
     ranger = FruitRanger(pixel_centroid_sigma_px=2.0,
