@@ -2,7 +2,7 @@ python3 operate.py
 python3 TargetPoseEst.py - dist 20
 
 
-❯ python3 final_demo_main.py --map lab_output/slam.txt --shopping_list shopping_list.txt --calib_dir calibration/param/ --controller ttg --model YOLO/model/V5.pt --ip 192.168.50.1 --interactive_gui --update_targets False
+❯ python3 final_demo_main.py --map slam_markers.txt --shopping_list shopping_list.txt --calib_dir calibration/param/ --controller ttg --model YOLO/model/V5.pt --ip 192.168.50.1 --interactive_gui --update_targets False
 
 
 inflation_margin
