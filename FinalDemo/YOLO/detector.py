@@ -42,8 +42,10 @@ class Detector:
 
         img_out = deepcopy(img)
 
+        items = self._edge_clipping(img_out, bboxes)
+
         # draw bounding boxes on the image
-        for bbox in bboxes:
+        for bbox in items:
             #  translate bounding box info back to the format of [x1,y1,x2,y2]
             xyxy = ops.xywh2xyxy(bbox[1])
             x1 = int(xyxy[0])
@@ -97,26 +99,7 @@ class Detector:
                     })
 
                 # Horizon clipping: drop boxes whose bottom lies in the top half of the image
-                try:
-                    H = int(img_out.shape[0])
-                    W = int(img_out.shape[1])
-                except Exception:
-                    H = 0
-                if H > 0:
-                    clipped = []
-                    half = H * 0.5
-                    for it in items:
-                        cx, cy, w, h = [float(v) for v in it['xywh']]
-                        left = cx - 0.5 * w
-                        right = cx + 0.5 * w
-                        bottom = cy + 0.5 * h
-                        if bottom >= half:
-                            clipped.append(it)
-                        elif left <= 0:
-                            clipped.append(it)
-                        elif right >= W:
-                            clipped.append(it)
-                    items = clipped
+                items = self._edge_clipping(img_out, items)
 
                 # Suppress overlapping boxes (keep highest-confidence)
                 kept = self._suppress_overlaps(items, self.overlap_iou_thresh)
@@ -164,26 +147,7 @@ class Detector:
                 })
 
         # Horizon clipping: drop boxes whose bottom lies in the top half of the image
-        try:
-            H = int(img_out.shape[0])
-            W = int(img_out.shape[1])
-        except Exception:
-            H = 0
-        if H > 0:
-            clipped = []
-            half = H * 0.5
-            for it in items:
-                cx, cy, w, h = [float(v) for v in it['xywh']]
-                left = cx - 0.5 * w
-                right = cx + 0.5 * w
-                bottom = cy + 0.5 * h
-                if bottom >= half:
-                    clipped.append(it)
-                elif left <= 0:
-                    clipped.append(it)
-                elif right >= W:
-                    clipped.append(it)
-            items = clipped
+        items = self._edge_clipping(img_out, items)
 
         # Suppress overlapping boxes (keep highest-confidence)
         kept = self._suppress_overlaps(items, self.overlap_iou_thresh)
@@ -213,6 +177,32 @@ class Detector:
             if keep:
                 kept.append(cand)
         return kept
+    
+    def _edge_clipping(self,img,bounding_boxes):
+        try:
+            H = int(img.shape[0])
+            W = int(img.shape[1])
+        except Exception:
+            H = 0
+            W = 0
+        
+        clipped = []
+        if H > 0 and W > 0:
+            half = H * 0.5
+            for it in bounding_boxes:
+                cx, cy, w, h = [float(v) for v in it['xywh']]
+                left = cx - 0.5 * w
+                right = cx + 0.5 * w
+                bottom = cy + 0.5 * h
+                if bottom >= half:
+                    clipped.append(it)  
+                elif left <= 0:
+                    clipped.append(it)
+                elif right >= W:
+                    clipped.append(it)
+        
+        # Return the clipped boxes
+        return clipped
 
     @staticmethod
     def _iou_xywh(a, b):
