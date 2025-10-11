@@ -60,7 +60,7 @@ class FruitRanger:
         Returns dict with keys: r, theta, sigma_r, sigma_theta, x, y (camera frame)
         or None if invalid inputs.
         """
-        cam_dist_from_centre = 0.01 # Distance of camera from centre of robot
+        cam_dist_from_centre = 0.03 # Distance of camera from centre of robot
 
         if camera_matrix is None:
             return None
