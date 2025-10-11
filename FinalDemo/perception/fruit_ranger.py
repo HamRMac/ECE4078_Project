@@ -89,7 +89,7 @@ class FruitRanger:
         cx = float(self.camera_matrix[0, 2]) if self.camera_matrix.shape[1] >= 3 else 160.0
 
         # Similar triangles range estimate along optical axis
-        r = (true_height_m / h) * f  - cam_dist_from_centre
+        r = (true_height_m / h) * f  + cam_dist_from_centre
 
         # Bearing in camera frame; positive when bbox centre is left of principal point
         x_c = x + w / 2.0
