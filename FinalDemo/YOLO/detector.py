@@ -99,6 +99,7 @@ class Detector:
                 # Horizon clipping: drop boxes whose bottom lies in the top half of the image
                 try:
                     H = int(img_out.shape[0])
+                    W = int(img_out.shape[1])
                 except Exception:
                     H = 0
                 if H > 0:
@@ -106,8 +107,14 @@ class Detector:
                     half = H * 0.5
                     for it in items:
                         cx, cy, w, h = [float(v) for v in it['xywh']]
+                        left = cx - 0.5 * w
+                        right = cx + 0.5 * w
                         bottom = cy + 0.5 * h
                         if bottom >= half:
+                            clipped.append(it)
+                        elif left <= 0:
+                            clipped.append(it)
+                        elif right >= W:
                             clipped.append(it)
                     items = clipped
 
@@ -158,18 +165,25 @@ class Detector:
 
         # Horizon clipping: drop boxes whose bottom lies in the top half of the image
         try:
-            H = int(cv_img.shape[0])
+            H = int(img_out.shape[0])
+            W = int(img_out.shape[1])
         except Exception:
             H = 0
-        if H > 0 and items:
-            filtered = []
+        if H > 0:
+            clipped = []
             half = H * 0.5
             for it in items:
                 cx, cy, w, h = [float(v) for v in it['xywh']]
+                left = cx - 0.5 * w
+                right = cx + 0.5 * w
                 bottom = cy + 0.5 * h
                 if bottom >= half:
-                    filtered.append(it)
-            items = filtered
+                    clipped.append(it)
+                elif left <= 0:
+                    clipped.append(it)
+                elif right >= W:
+                    clipped.append(it)
+            items = clipped
 
         # Suppress overlapping boxes (keep highest-confidence)
         kept = self._suppress_overlaps(items, self.overlap_iou_thresh)
