@@ -108,6 +108,50 @@ class PiBotActions:
         
         return last_tick
 
+    def localise_scan(self,
+                      get_pose_fn: Callable[[], List[float]],
+                      turning_tick: int) -> None:
+        """Spin the robot roughly 360° using continuous motion feedback."""
+        if not callable(get_pose_fn):
+            log.error("localise_scan: get_pose_fn is not callable")
+            return
+
+        def wrap_pi(angle: float) -> float:
+            return (angle + math.pi) % (2.0 * math.pi) - math.pi
+
+        try:
+            start_pose, _ = get_pose_fn()
+            start_heading = float(start_pose[2])
+        except Exception as exc:
+            log.error("localise_scan: unable to get initial pose (%s)", exc)
+            return
+
+        accumulated = 0.0
+        last_heading = start_heading
+        target_rotation = 2.0 * math.pi
+
+        try:
+            self.ppi.set_velocity([0, 1], turning_tick=int(turning_tick), time=0)
+        except Exception as exc:
+            log.error("localise_scan: failed to start rotation (%s)", exc)
+            return
+
+        start_time = time.time()
+        timeout = 30.0
+        while accumulated < target_rotation and (time.time() - start_time) < timeout:
+            try:
+                pose, _ = get_pose_fn()
+                heading = float(pose[2])
+            except Exception:
+                heading = last_heading
+
+            delta = wrap_pi(heading - last_heading)
+            accumulated += abs(delta)
+            last_heading = heading
+            time.sleep(0.05)
+
+        self.ppi.set_velocity([0, 0], turning_tick=int(turning_tick), time=0)
+
     def scan(self,
              step_angle_deg: float,
              detector: Detector,

@@ -499,7 +499,8 @@ class Operate:
                 self.command['output'] = True
             # Joint optimisation manual trigger
             elif event.type == pygame.KEYDOWN and event.key == pygame.K_o:
-                self.command['optimise_now'] = True
+                pass
+                #self.command['optimise_now'] = True
             # Reset SLAM map (double press R)
             elif event.type == pygame.KEYDOWN and event.key == pygame.K_r:
                 if self.double_reset_comfirm == 0:

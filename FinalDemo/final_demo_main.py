@@ -82,30 +82,26 @@ def read_true_map(fname):
         gt_dict = json.load(fd)
         fruit_list = []
         fruit_true_pos = []
-        aruco_true_pos = np.empty([10, 2])
-        aruco_true_pos_id = np.empty([10, 3])
+        num_arucos = len(gt_dict)
+        aruco_true_pos = np.empty([num_arucos, 2])
+        aruco_true_pos_id = np.empty([num_arucos, 3])
+        log.info(f"Loading {num_arucos} arucos")
 
         rounding = 4
 
         # remove unique id of targets of the same type
-        for key in gt_dict:
-            x = np.round(gt_dict[key]['x'], rounding)
-            y = np.round(gt_dict[key]['y'], rounding)
-
+        for idx, key in enumerate(gt_dict):
             if key.startswith('aruco'):
-                if key.startswith('aruco10'):
-                    aruco_true_pos[9][0] = x
-                    aruco_true_pos[9][1] = y
-                    aruco_true_pos_id[9][0] = x
-                    aruco_true_pos_id[9][1] = y
-                    aruco_true_pos_id[9][2] = 10
-                else:
-                    marker_id = int(key[5]) - 1
-                    aruco_true_pos[marker_id][0] = x
-                    aruco_true_pos[marker_id][1] = y
-                    aruco_true_pos_id[marker_id][0] = x
-                    aruco_true_pos_id[marker_id][1] = y
-                    aruco_true_pos_id[marker_id][2] = int(marker_id + 1)
+                x = np.round(gt_dict[key]['x'], rounding)
+                y = np.round(gt_dict[key]['y'], rounding)
+                aruco_id = int(str(key).split("_")[0].replace("aruco",""))
+                # Write the idless version
+                aruco_true_pos[idx][0] = x
+                aruco_true_pos[idx][1] = y
+                # Write the version with the id
+                aruco_true_pos_id[idx][0] = x
+                aruco_true_pos_id[idx][1] = y
+                aruco_true_pos_id[idx][2] = int(aruco_id)
             #else:
             #    fruit_list.append(key[:-2])
             #    if len(fruit_true_pos) == 0:
