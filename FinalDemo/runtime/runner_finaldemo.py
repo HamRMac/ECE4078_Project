@@ -69,6 +69,7 @@ class RunnerFinal(threading.Thread):
                  obstacle_sizes: Optional[Dict[str, float]] = None,
                  reached_thresh_m: Optional[float] = 0.25,
                  max_approach_attempts: Optional[int] = 6,
+                 disable_scans: Optional[bool] = False,
                  ):
         super().__init__(daemon=True, name="RunnerFinal")
 
@@ -116,7 +117,11 @@ class RunnerFinal(threading.Thread):
         self._just_replanned: bool = False
 
         self._target_mode: Literal['KNOWN_TARGETS','CHECK_ALL'] = 'KNOWN_TARGETS'
-        
+
+        self.disable_scans = bool(disable_scans)
+        if self.disable_scans:
+            log.warning("Scans are disabled.")
+
         '''
         # Ordered route derived from shopping list
         self._route = ()
@@ -364,6 +369,9 @@ class RunnerFinal(threading.Thread):
             return False
 
     def _scan_and_update(self):
+        if self.disable_scans:
+            log.debug("Skipping scan due to config")
+            return
         # Tunables
         CLOSE_DET_RADIUS_M = 0.8   # "close to the robot" (consistent with earlier usage)
         ASSIGN_THRESH_M    = 0.30  # 30 cm

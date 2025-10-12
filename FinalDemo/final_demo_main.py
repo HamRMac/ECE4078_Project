@@ -449,7 +449,7 @@ def _parse_args():
     parser.add_argument("--aruco_kd", type=float, default=1.0, help='Adaptive R scale by range: (1 + kd*range^2)')
     parser.add_argument("--level", type=int, default=1, choices=[1,2], help='Demo level: 1 or 2 (default 1)')
     parser.add_argument("--interactive_gui", action='store_true', help='Allow GUI clicks to set manual goals (Runner executes)')
-    
+    parser.add_argument("--disable_scans", action='store_true', help='Disable scans')
     return parser.parse_known_args()
 
 
@@ -692,6 +692,8 @@ def main():
             "undetected": float(args.obstacle_size_large),
             "detected": float(args.obstacle_size_small),
         },
+
+        disable_scans=bool(args.disable_scans),
     )
     runner.start()
 

@@ -83,7 +83,7 @@ class PiBotActions:
         t0 = time.time()
         last_tick = -1000
         while True:
-            pose_now = get_pose_fn()
+            pose_now, _ = get_pose_fn()
             th_now = wrap_pi(float(pose_now[2] if pose_now is not None else 0.0))
             err = wrap_pi(float(goal_heading_rad) - th_now)
             log.debug(f"scan: angle: {th_now} with goal {goal_heading_rad} --> err = {err}")
@@ -513,7 +513,7 @@ class PiBotActions:
         # convert to radians and normalise to [-pi, pi]
         goal_th = (math.radians(goal_angle_deg) + math.pi) % (2.0 * math.pi) - math.pi
         try:
-            pose_fn = self.get_pose_fn if callable(self.get_pose_fn) else (lambda: [0.0, 0.0, 0.0])
+            pose_fn, _ = self.get_pose_fn if callable(self.get_pose_fn) else (lambda: [0.0, 0.0, 0.0], None)
             last_tick = self.turn_to_heading(goal_th, pose_fn, turning_tick)
             # ensure motors stopped from turning
             try:
@@ -698,7 +698,8 @@ class PiBotActions:
         # Optional nearest-first ordering
         if order == "nearest" and callable(self.get_pose_fn) and canon:
             try:
-                rx, ry, *_ = self.get_pose_fn()
+                pose, _ = self.get_pose_fn()
+                rx, ry, *_ = pose
                 canon.sort(key=lambda t: (t["position"][0] - rx)**2 + (t["position"][1] - ry)**2)
             except Exception:
                 pass
@@ -726,7 +727,8 @@ class PiBotActions:
         """
         if not callable(self.get_pose_fn):
             raise RuntimeError("Pose function not set. Pass get_pose_fn to scan(...) or set self.get_pose_fn.")
-        rx, ry, rth = [float(v) for v in self.get_pose_fn()]
+        pose, _ = self.get_pose_fn()
+        rx, ry, rth = [float(v) for v in pose]
         tx, ty = float(target_xy[0]), float(target_xy[1])
         dx, dy = tx - rx, ty - ry
         ang = math.degrees(math.atan2(dy, dx) - rth)
@@ -745,7 +747,8 @@ class PiBotActions:
         angle_deg, distance_m = self._rel_angle_dist(tgt["position"], standoff_m=standoff_m)
         # compute global heading: robot heading + relative angle
         try:
-            rx, ry, rth = [float(v) for v in self.get_pose_fn()]
+            pose, _ = self.get_pose_fn()
+            rx, ry, rth = [float(v) for v in pose]
             global_heading_deg = (math.degrees(rth) + float(angle_deg) + 180.0) % 360.0 - 180.0
         except Exception:
             global_heading_deg = float(angle_deg)
