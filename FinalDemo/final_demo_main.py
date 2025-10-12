@@ -12,6 +12,8 @@ import logging
 import threading
 from collections import defaultdict, deque
 
+from typing import List, Tuple
+
 from YOLO.detector import Detector
 
 # import utility functions
@@ -30,6 +32,8 @@ from navigation.controller import ControllerManager
 from planning.astar import AStarPlanner
 from gui.pibot_gui import PiBotGUI
 from planning.grid_map import GridMap
+
+from slam.aruco_detector import aruco_detector
 
 # Import state machine
 from state_machine.state_machine import PiBotFruitSearchSM
@@ -126,7 +130,7 @@ def read_search_list(list_path):
 
     return search_list
 
-def get_robot_pose(penguin_pi: PenguinPi, aruco_detector, ekf):
+def get_robot_pose(penguin_pi: PenguinPi, aruco_detector: aruco_detector, ekf: EKF) -> Tuple[List[float], float]:
     # Dummy robot_pose
     robot_pose = [0.0,0.0,0.0] # will be replaced by EKF state below
 
@@ -153,6 +157,13 @@ def get_robot_pose(penguin_pi: PenguinPi, aruco_detector, ekf):
     lms, _ = aruco_detector.detect_marker_positions(img)
     ekf.update(lms)
 
+    # --- Track time since last seen ArUco ---
+    if not hasattr(get_robot_pose, "_last_aruco_t"):
+        get_robot_pose._last_aruco_t = now
+    if lms:  # at least one marker detected
+        get_robot_pose._last_aruco_t = now
+    time_since_last_aruco = now - get_robot_pose._last_aruco_t
+
     # Read pose from EKF robot state
     try:
         rs = ekf.robot.state.flatten()
@@ -167,10 +178,7 @@ def get_robot_pose(penguin_pi: PenguinPi, aruco_detector, ekf):
 
     ####################################################
 
-    return robot_pose
-
-
-    
+    return robot_pose, time_since_last_aruco
 
 
 # wheel and camera calibration for SLAM
@@ -569,53 +577,12 @@ def _init_perception(args, ekfInstance):
 
 
 def _make_pose_fn(args, penguinpiInstance, aruco_detector, ekfInstance):
-    # Optional smoothed pose wrapper (EMA + rate limits)
-    class _SmoothedPose:
-        def __init__(self, alpha_pos: float, alpha_yaw: float, max_xy: float, max_yaw_deg: float):
-            self.alpha_p = float(max(0.0, min(1.0, alpha_pos)))
-            self.alpha_y = float(max(0.0, min(1.0, alpha_yaw)))
-            self.max_xy = float(max_xy)
-            self.max_yaw = float(max_yaw_deg) * np.pi / 180.0
-            self.prev = None
-
-        @staticmethod
-        def _wrap(theta):
-            return (theta + np.pi) % (2*np.pi) - np.pi
-
-        def step(self, raw):
-            x, y, th = float(raw[0]), float(raw[1]), float(raw[2])
-            if self.prev is None:
-                self.prev = (x, y, th)
-                return [x, y, th]
-            px, py, pth = self.prev
-            # EMA
-            sx = self.alpha_p * x + (1 - self.alpha_p) * px
-            sy = self.alpha_p * y + (1 - self.alpha_p) * py
-            dth = self._wrap(th - pth)
-            sth = self._wrap(pth + self.alpha_y * dth)
-            # Rate limit
-            dx = np.clip(sx - px, -self.max_xy, self.max_xy)
-            dy = np.clip(sy - py, -self.max_xy, self.max_xy)
-            dth_rl = np.clip(self._wrap(sth - pth), -self.max_yaw, self.max_yaw)
-            out = (px + dx, py + dy, self._wrap(pth + dth_rl))
-            self.prev = out
-            return [out[0], out[1], out[2]]
-
-    smoother = None
-    if bool(args.pose_smoothing):
-        smoother = _SmoothedPose(args.pose_alpha_pos, args.pose_alpha_yaw, args.pose_rate_xy, args.pose_rate_yaw)
-
     def _get_pose():
         if args.no_run or args.ip == 'localhost':
-            pose = [0.0, 0.0, 0.0]
+            pose, time_since_last_aruco = [0.0, 0.0, 0.0], None
         else:
-            pose = get_robot_pose(penguinpiInstance, aruco_detector, ekfInstance)
-        if smoother is not None:
-            try:
-                return smoother.step(pose)
-            except Exception:
-                return pose
-        return pose
+            pose, time_since_last_aruco = get_robot_pose(penguinpiInstance, aruco_detector, ekfInstance)
+        return pose, time_since_last_aruco
     return _get_pose
 
 

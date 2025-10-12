@@ -558,7 +558,7 @@ class PiBotGUI:
                         pose = [0.0, 0.0, 0.0]
                         if callable(self.get_pose_fn):
                             try:
-                                pose = self.get_pose_fn()
+                                pose, _ = self.get_pose_fn()
                             except Exception:
                                 pass
                         start_xy = (float(pose[0]), float(pose[1]))
@@ -570,7 +570,7 @@ class PiBotGUI:
             
             if callable(self.get_pose_fn):
                 try:
-                    pose = self.get_pose_fn()
+                    pose, _ = self.get_pose_fn()
                 except Exception:
                     pass
             self._draw_overlay(self._surface, (float(pose[0]), float(pose[1]), float(pose[2])))

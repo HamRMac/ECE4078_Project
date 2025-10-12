@@ -149,7 +149,7 @@ class RunnerFinal(threading.Thread):
         self.grid._clearance_cache = None  # invalidate cache
 
     def _plan_from_current(self) -> bool:
-        pose = self.get_pose_fn()
+        pose, _ = self.get_pose_fn()
         if self._goal is None:
             return False
         pr = self.planner.plan(self.grid, (pose[0], pose[1]), (self._goal[0], self._goal[1]))
@@ -208,7 +208,7 @@ class RunnerFinal(threading.Thread):
         """Plan to a standoff point on the circle of radius 'radius_m' around the target.
         For this radius, evaluate all candidate approach points and pick the shortest successful path.
         """
-        pose = self.get_pose_fn()
+        pose, _ = self.get_pose_fn()
         rx, ry = float(pose[0]), float(pose[1])
         tx, ty = float(target_xy[0]), float(target_xy[1])
         base_th = math.atan2(ty - ry, tx - rx)
@@ -390,7 +390,8 @@ class RunnerFinal(threading.Thread):
         except Exception:
             raw_dets = []
 
-        rx, ry, _ = self.get_pose_fn()
+        pose, _ = self.get_pose_fn()
+        rx, ry, _ = pose 
 
         close_dets = []
         for d in raw_dets:
@@ -552,7 +553,8 @@ class RunnerFinal(threading.Thread):
             # If we are in CHECK_ALL
             if self._target_mode == 'CHECK_ALL':
                 # 1) Choose closest unclassified target
-                wx, wy, _ = self.get_pose_fn()
+                pose, _ = self.get_pose_fn()
+                wx, wy, _ = pose
 
                 unclassified = [
                     (tid, info) for tid, info in self.target_positions.items()
@@ -674,9 +676,10 @@ class RunnerFinal(threading.Thread):
                 # 2) Plan: get as close as possible
                 planned = self._plan_best_approach_to_target(txy)
                 if not planned:
-                    log.info("No path found yet towards %s; rescanning", name)
+                    log.warning("No path found towards %s. Scanning...", name)
                     self.world.set_status(mode='AUTO', sm_state='FinalDemo', action='replan', target=name,
                                            progress=progress_str)
+                    self._scan_and_update()
                     time.sleep(0.5)
                     attempt += 1
                     continue
@@ -685,8 +688,22 @@ class RunnerFinal(threading.Thread):
                 done_this_target = False
                 while not self._stop.is_set() and self._plan_waypoints:
                     t0 = time.time()
-                    pose = self._get_return_pose()
+                    # Get the pose and time since we last saw an ArUco
+                    pose, aruco_time_delta = self._get_return_pose()
+
+                    # If aruco_time_delta is large, we are probably lost - do a scan and replan
+                    if aruco_time_delta is None or aruco_time_delta > 10.0:
+                        log.info("No recent ArUco sighting (last seen %.1f s ago); scanning and replanning",
+                                 float(aruco_time_delta) if aruco_time_delta is not None else -1.0)
+                        self.world.set_status(mode='AUTO', sm_state='FinalDemo', action='scan', target=name,
+                                               progress=progress_str)
+                        self._scan_and_update()
+                        self.world.set_status(mode='AUTO', sm_state='FinalDemo', action='replanning', target=name,
+                                               progress=progress_str)
+
+                    # Check if we need to replan due to target movement or cross-track error
                     self._maybe_replan(pose)
+                    # Drive one step
                     self._drive_step(pose)
                     try:
                         total = max(1, len(self._plan_waypoints) - 1)
@@ -694,11 +711,13 @@ class RunnerFinal(threading.Thread):
                                                progress=f"{min(self._wp_idx,total)}/{total}")
                     except Exception:
                         pass
+                   
+                    # Check if we are within threshold of the target
                     dist = self._dist((pose[0], pose[1]), txy)
                     if dist <= self.reached_thresh_m:
                         print(f"Potentially reached {name}, verifying...")
                         self._scan_and_update()
-                        pose = self._get_return_pose()
+                        pose, _ = self._get_return_pose()
                         dist = self._dist((pose[0], pose[1]), txy)
                         if dist <= self.reached_thresh_m:
                             print(f"🎯 <-- Reached {name}")
@@ -735,9 +754,9 @@ class RunnerFinal(threading.Thread):
         self.cmd.stop()
 
     def _get_return_pose(self):
-        pose = self.get_pose_fn()
+        pose, aruco_time_delta = self.get_pose_fn()
         self.world.set_pose(pose)
-        return pose
+        return pose, aruco_time_delta
 
     def update_dynamic_layer_with_targets(self):
         targets = getattr(self, 'all_targets_world_dict', {}) or {}
