@@ -858,57 +858,17 @@ class RunnerFinal(threading.Thread):
                     txy = new_txy
                     self._goal = txy
 
-                pose = self.get_pose_fn()
-                self.world.set_pose(pose)
+                pose = self._get_return_pose()
                 dist = self._dist((pose[0], pose[1]), txy)
                 if dist <= self.reached_thresh_m:
-                    print(f"🎯 <-- Reached {name}")
-                    time.sleep(2.0)
-                    # Update targets info: mark as collected
-                    try:
-                        wm = self.world.get_targets_info()
-                        collected_targets.append(current_target_index)
-                        self.world.set_targets_info(
-                            targets=self.all_targets_world_dict,
-                            active=-1,
-                            collected=collected_targets
-                        )
-                        self.world.set_status(mode='AUTO', sm_state='FinalDemo', action='reached', target=name,
-                                               progress=progress_str)
-                    except Exception:
-                        pass
-                    break  # next target
-
-                # 2) Plan: get as close as possible
-                planned = self._plan_best_approach_to_target(txy)
-                if not planned:
-                    log.info("No path found yet towards %s; rescanning", name)
-                    self.world.set_status(mode='AUTO', sm_state='FinalDemo', action='replan', target=name,
-                                           progress=progress_str)
-                    time.sleep(0.5)
-                    attempt += 1
-                    continue
-                # 4) Drive this plan
-                done_this_target = False
-                while not self._stop.is_set() and self._plan_waypoints:
-                    t0 = time.time()
-                    pose = self.get_pose_fn()
-                    self.world.set_pose(pose)
-                    self._maybe_replan(pose)
-                    self._drive_step(pose)
-                    try:
-                        total = max(1, len(self._plan_waypoints) - 1)
-                        self.world.set_status(mode='AUTO', sm_state='FinalDemo', action='drive', target=name,
-                                               progress=f"{min(self._wp_idx,total)}/{total}")
-                    except Exception:
-                        pass
+                    self._scan_and_update()
+                    print(f"Potentially reached {name}, verifying...")
+                    pose = self._get_return_pose()
                     dist = self._dist((pose[0], pose[1]), txy)
                     if dist <= self.reached_thresh_m:
                         print(f"🎯 <-- Reached {name}")
-                        self.cmd.stop()
                         time.sleep(2.0)
-                        self._plan_waypoints = []
-                        # mirror collection update here to avoid re-scanning and double-reporting
+                        # Update targets info: mark as collected
                         try:
                             wm = self.world.get_targets_info()
                             collected_targets.append(current_target_index)
@@ -921,12 +881,63 @@ class RunnerFinal(threading.Thread):
                                                 progress=progress_str)
                         except Exception:
                             pass
+                        break  # next target
 
-                        done_this_target = True
-                        break
+                # 2) Plan: get as close as possible
+                planned = self._plan_best_approach_to_target(txy)
+                if not planned:
+                    log.info("No path found yet towards %s; rescanning", name)
+                    self.world.set_status(mode='AUTO', sm_state='FinalDemo', action='replan', target=name,
+                                           progress=progress_str)
+                    time.sleep(0.5)
+                    attempt += 1
+                    continue
+                
+                # 4) Drive this plan
+                done_this_target = False
+                while not self._stop.is_set() and self._plan_waypoints:
+                    t0 = time.time()
+                    pose = self._get_return_pose()
+                    self._maybe_replan(pose)
+                    self._drive_step(pose)
+                    try:
+                        total = max(1, len(self._plan_waypoints) - 1)
+                        self.world.set_status(mode='AUTO', sm_state='FinalDemo', action='drive', target=name,
+                                               progress=f"{min(self._wp_idx,total)}/{total}")
+                    except Exception:
+                        pass
+                    dist = self._dist((pose[0], pose[1]), txy)
+                    if dist <= self.reached_thresh_m:
+                        self._scan_and_update()
+                        print(f"Potentially reached {name}, verifying...")
+                        pose = self._get_return_pose()
+                        dist = self._dist((pose[0], pose[1]), txy)
+                        if dist <= self.reached_thresh_m:
+                            print(f"🎯 <-- Reached {name}")
+                            self.cmd.stop()
+                            time.sleep(2.0)
+                            self._plan_waypoints = []
+                            # mirror collection update here to avoid re-scanning and double-reporting
+                            try:
+                                wm = self.world.get_targets_info()
+                                collected_targets.append(current_target_index)
+                                self.world.set_targets_info(
+                                    targets=self.all_targets_world_dict,
+                                    active=-1,
+                                    collected=collected_targets
+                                )
+                                self.world.set_status(mode='AUTO', sm_state='FinalDemo', action='reached', target=name,
+                                                    progress=progress_str)
+                            except Exception:
+                                pass
+
+                            done_this_target = True
+                            break
+                    
                     dt = time.time() - t0
                     if dt < self._period:
                         time.sleep(self._period - dt)
+                
                 # Loop back to scan again if not within threshold
                 if done_this_target:
                     break
@@ -934,6 +945,11 @@ class RunnerFinal(threading.Thread):
         self.world.set_status(mode='AUTO', sm_state='FinalDemo', action='done')
         print("Reached all targets")
         self.cmd.stop()
+
+    def _get_return_pose(self):
+        pose = self.get_pose_fn()
+        self.world.set_pose(pose)
+        return pose
 
     def update_dynamic_layer_with_targets(self):
         targets = getattr(self, 'all_targets_world_dict', {}) or {}
