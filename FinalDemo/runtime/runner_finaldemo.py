@@ -859,7 +859,7 @@ class RunnerFinal(threading.Thread):
                             str(current_target_index), txy[0], txy[1], new_txy[0], new_txy[1])
                     txy = new_txy
                     self._goal = txy
-
+                '''
                 pose = self._get_return_pose()
                 dist = self._dist((pose[0], pose[1]), txy)
                 if dist <= self.reached_thresh_m:
@@ -884,7 +884,8 @@ class RunnerFinal(threading.Thread):
                         except Exception:
                             pass
                         break  # next target
-
+                '''
+                
                 # 2) Plan: get as close as possible
                 planned = self._plan_best_approach_to_target(txy)
                 if not planned:
