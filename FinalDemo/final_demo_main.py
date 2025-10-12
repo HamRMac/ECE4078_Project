@@ -433,6 +433,7 @@ def _parse_args():
     parser.add_argument("--inflation_margin", type=float, default=0.05, help='Exclusion zone inflation margin (m)')
     parser.add_argument("--reached_thresh_m", type=float, default=0.25, help='Threshold to consider a target "reached" (m)')
     parser.add_argument("--max_approach_attempts", type=int, default=6, help='Maximum attempts to approach a target')
+    parser.add_argument("--boundary_margin", type=float, default=0.01, help='Boundary margin for the arena edge (m)')
     # Pose smoothing (control/GUI)
     parser.add_argument("--pose_smoothing", action='store_true', help='Enable EMA + rate-limited smoothed pose for control/GUI')
     parser.add_argument("--pose_alpha_pos", type=float, default=0.2, help='EMA alpha for x/y')
@@ -517,7 +518,7 @@ def _load_map_and_shopping(args):
 
 def _build_grid_from_aruco(args, aruco_true_pos: np.ndarray) -> GridMap:
     grid = GridMap(res=0.02, margin=0.0, robot_radius=0.09,
-                   inflation_margin=args.inflation_margin, boundary_margin=0.01,
+                   inflation_margin=args.inflation_margin, boundary_margin=args.boundary_margin,
                    arena_bounds_wm=(-1.4, -1.4, 1.4, 1.4))
     grid.build_from_aruco(aruco_true_pos)
     log.info("[WM] Occupancy grid built: size=%s res=%.3f m", str(grid.size), grid.res)
