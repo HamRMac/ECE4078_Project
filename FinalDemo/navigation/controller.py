@@ -55,8 +55,19 @@ class TurnThenGoController(BaseController):
             return 0, turn_dir, 0, turn_tick, False
 
         # Drive forward if aligned
+        allowed_speeds = range(self.min_forward_tick, self.max_forward_tick + 1, 15)
         fwd_mag = min(1.0, dist / 0.5)
         fwd_tick = int(min(self.max_forward_tick, max(self.min_forward_tick, fwd_mag * self.max_forward_tick)))
+
+        round_speed = None
+        for speed in allowed_speeds:
+            if round_speed == None or abs(speed-fwd_tick) < round_speed:
+                round_speed = speed
+            if abs(speed - fwd_tick) > round_speed:
+                break
+
+        fwd_tick = round_speed
+
         log.debug("TTG forward: dist=%.3f tick=%d", dist, fwd_tick)
         return 1, 0, fwd_tick, 0, False
 
