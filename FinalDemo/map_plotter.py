@@ -1,29 +1,46 @@
 import json
 import matplotlib.pyplot as plt
 
-# Load map from file
-with open("true_map_backup.txt", "r") as f:
-    map_data = json.load(f)
+# --- Load the data ---
+with open("slam_markers.txt", "r") as f:
+    markers = json.load(f)
 
-# Separate markers and fruits
-markers = {k:v for k,v in map_data.items() if k.startswith("aruco")}
-fruits = {k:v for k,v in map_data.items() if not k.startswith("aruco")}
+with open("lab_output/targets.txt", "r") as f:
+    targets = json.load(f)
 
-plt.figure(figsize=(10,10))
+# --- Extract coordinates ---
+marker_x = [v["x"] for v in markers.values()]
+marker_y = [v["y"] for v in markers.values()]
 
-# Plot markers
-for name, pos in markers.items():
-    plt.scatter(pos["x"], pos["y"], c='blue', marker='s', s=100)
-    plt.text(pos["x"]+0.02, pos["y"]+0.02, name, color='blue')
+target_x = [v["x"] for v in targets.values()]
+target_y = [v["y"] for v in targets.values()]
 
-# Plot fruits
-for name, pos in fruits.items():
-    plt.scatter(pos["x"], pos["y"], c='green', marker='o', s=100)
-    plt.text(pos["x"]+0.02, pos["y"]+0.02, name, color='green')
+# --- Plot ---
+fig, ax = plt.subplots(figsize=(8, 8))
 
-plt.xlabel("X (m)")
-plt.ylabel("Y (m)")
-plt.title("ArUco Markers and Fruits Map")
-plt.grid(True)
-plt.axis('equal')
+# Plot ArUco markers
+ax.scatter(marker_x, marker_y, color="blue", label="Markers", s=100)
+for name, v in markers.items():
+    ax.text(v["x"], v["y"], name, color="blue", fontsize=9, ha='right', va='bottom')
+
+# Plot targets
+ax.scatter(target_x, target_y, color="green", label="Targets", s=100, marker='s')
+for name, v in targets.items():
+    ax.text(v["x"], v["y"], name, color="green", fontsize=9, ha='left', va='bottom')
+
+# Set axes labels
+ax.set_xlabel("X (m)")
+ax.set_ylabel("Y (m)")
+ax.set_title("Markers and Targets Map")
+
+# Set gradations every 0.3 m
+ax.xaxis.set_major_locator(plt.MultipleLocator(0.3))
+ax.yaxis.set_major_locator(plt.MultipleLocator(0.3))
+
+# Grid
+ax.grid(True, which='major', linestyle='--', alpha=0.7)
+
+ax.legend()
+ax.set_aspect('equal')  # Keep aspect ratio square
+
 plt.show()
