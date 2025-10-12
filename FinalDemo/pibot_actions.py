@@ -179,7 +179,7 @@ class PiBotActions:
             start_pose = None
             if callable(get_pose_fn):
                 try:
-                    start_pose = get_pose_fn()
+                    start_pose, _ = get_pose_fn()
                 except Exception:
                     start_pose = [0.0, 0.0, 0.0]
             curr_th = float(start_pose[2] if start_pose is not None else 0.0)
@@ -197,7 +197,7 @@ class PiBotActions:
             pose_now = None
             if callable(get_pose_fn):
                 try:
-                    pose_now = get_pose_fn()
+                    pose_now, _ = get_pose_fn()
                 except Exception as e:
                     log.warning("scan: pose capture failed at step %d/%d: %s", i+1, n_steps, e)
                     pose_now = [0.0, 0.0, 0.0]
@@ -412,7 +412,7 @@ class PiBotActions:
             """Capture an image, detect markers, and fuse them into the EKF."""
             nonlocal total_markers
             try:
-                pose_now = get_pose_fn() if callable(get_pose_fn) else [0.0, 0.0, 0.0]
+                pose_now, _ = get_pose_fn() if callable(get_pose_fn) else ([0.0, 0.0, 0.0], None)
             except Exception:
                 pose_now = [0.0, 0.0, 0.0]
 
@@ -454,7 +454,7 @@ class PiBotActions:
         for idx in range(n_steps):
             # Closed-loop turn to the next heading.
             try:
-                pose_now = get_pose_fn() if callable(get_pose_fn) else [0.0, 0.0, 0.0]
+                pose_now, _ = get_pose_fn() if callable(get_pose_fn) else ([0.0, 0.0, 0.0], None)
             except Exception:
                 pose_now = [0.0, 0.0, 0.0]
             curr_th = float(pose_now[2] if pose_now is not None else 0.0)
@@ -631,7 +631,7 @@ class PiBotActions:
 
         for _ in range(n_steps):
             try:
-                pose_now = get_pose_fn() if callable(get_pose_fn) else [0.0, 0.0, 0.0]
+                pose_now, _ = get_pose_fn() if callable(get_pose_fn) else ([0.0, 0.0, 0.0], None)
             except Exception:
                 pose_now = [0.0, 0.0, 0.0]
             curr_th = float(pose_now[2] if pose_now is not None else 0.0)

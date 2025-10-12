@@ -693,7 +693,7 @@ class RunnerFinal(threading.Thread):
                     pose, time_of_last_aruco = self._get_return_pose()
                     # Compute time since last ArUco sighting or start of approach (whichever is larger)
                     # if the latter is larger, we haven't seen an ArUco since starting the approach
-                    time_since_last_aruco = time.time() - max(time_of_start_of_approach,time_of_last_aruco)
+                    time_since_last_aruco = time.monotonic() - max(time_of_start_of_approach,time_of_last_aruco)
                     # If time_since_last_aruco is large, we are probably lost - do a scan and replan
                     if time_since_last_aruco > 10.0:
                         log.info("No recent ArUco sighting (last seen %.1f s ago); scanning and replanning",
