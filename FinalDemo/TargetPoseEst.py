@@ -537,111 +537,111 @@ if __name__ == "__main__":
     # - Post-clustering points: full opacity
     # - Colors per class from yolo.class_colour
     # --------------------
-    try:
-        fig, ax = plt.subplots(figsize=(6, 6))
-        ax.set_xlim(-ARENA_BOUND, ARENA_BOUND)
-        ax.set_ylim(-ARENA_BOUND, ARENA_BOUND)
-        ax.set_aspect('equal', adjustable='box')  # ensure AR = 1
-        ax.set_xlabel('x [m]')
-        ax.set_ylabel('y [m]')
-        ax.set_title('Fruit Positions: pre (transparent) vs post (solid) clustering')
+    #try:
+    fig, ax = plt.subplots(figsize=(6, 6))
+    ax.set_xlim(-ARENA_BOUND, ARENA_BOUND)
+    ax.set_ylim(-ARENA_BOUND, ARENA_BOUND)
+    ax.set_aspect('equal', adjustable='box')  # ensure AR = 1
+    ax.set_xlabel('x [m]')
+    ax.set_ylabel('y [m]')
+    ax.set_title('Fruit Positions: pre (transparent) vs post (solid) clustering')
 
-        # Grid: small 0.3 m (minor), large 0.9 m (major)
-        ax.xaxis.set_major_locator(MultipleLocator(1.0))
-        ax.yaxis.set_major_locator(MultipleLocator(1.0))
-        ax.xaxis.set_minor_locator(MultipleLocator(0.25))
-        ax.yaxis.set_minor_locator(MultipleLocator(0.25))
-        ax.grid(which='major', linestyle='-', linewidth=0.8, color='0.7')
-        ax.grid(which='minor', linestyle=':', linewidth=0.5, color='0.85')
+    # Grid: small 0.3 m (minor), large 0.9 m (major)
+    ax.xaxis.set_major_locator(MultipleLocator(1.0))
+    ax.yaxis.set_major_locator(MultipleLocator(1.0))
+    ax.xaxis.set_minor_locator(MultipleLocator(0.25))
+    ax.yaxis.set_minor_locator(MultipleLocator(0.25))
+    ax.grid(which='major', linestyle='-', linewidth=0.8, color='0.7')
+    ax.grid(which='minor', linestyle=':', linewidth=0.5, color='0.85')
 
-        # Helper to convert OpenCV BGR (0-255) to Matplotlib RGB (0-1)
-        def bgr_to_rgb01(bgr):
-            return (bgr[2] / 255.0, bgr[1] / 255.0, bgr[0] / 255.0)
+    # Helper to convert OpenCV BGR (0-255) to Matplotlib RGB (0-1)
+    def bgr_to_rgb01(bgr):
+        return (bgr[2] / 255.0, bgr[1] / 255.0, bgr[0] / 255.0)
 
-        # Plot pre-clustering detections with reduced opacity
-        pre_by_class = {}
-        for key, pose in target_pose_dict.items():
-            cls = key.split('_')[0]
-            pre_by_class.setdefault(cls, []).append((pose['x'], pose['y']))
+    # Plot pre-clustering detections with reduced opacity
+    pre_by_class = {}
+    for key, pose in target_pose_dict.items():
+        cls = key.split('_')[0]
+        pre_by_class.setdefault(cls, []).append((pose['x'], pose['y']))
 
-        for cls, pts in pre_by_class.items():
-            color_rgb = bgr_to_rgb01(yolo.class_colour.get(cls, (128, 128, 128)))
+    for cls, pts in pre_by_class.items():
+        color_rgb = bgr_to_rgb01(yolo.class_colour.get(cls, (128, 128, 128)))
+        xs = [p[0] for p in pts]
+        ys = [p[1] for p in pts]
+        # Pre-cluster points: small size, transparent
+        ax.scatter(xs, ys, c=[color_rgb], alpha=0.35, s=25, edgecolors='none')
+
+    # Prepare post-clustering points grouped by class
+    post_by_class = {}
+    for key, pose in target_est.items():
+        cls = key.split('_')[0]
+        post_by_class.setdefault(cls, []).append((pose['x'], pose['y']))
+
+    # Draw cluster outlines (convex hull per DBSCAN cluster of pre-cluster points)
+    eps, min_samples = 0.15, 2  # keep in sync with merge_estimations defaults
+    for cls, pts in pre_by_class.items():
+        if len(pts) < 1:
+            continue
+        pts_np = np.array(pts, dtype=np.float32)
+        labels = DBSCAN(eps=eps, min_samples=min_samples).fit(pts_np).labels_
+        color_rgb = bgr_to_rgb01(yolo.class_colour.get(cls, (128, 128, 128)))
+
+        for cid in np.unique(labels):
+            if cid == -1:
+                continue  # skip noise
+            cluster_pts = pts_np[labels == cid]
+
+            #if cluster_pts.ndim == 1:
+            #    cluster_pts = cluster_pts.reshape(1, -1)
+
+
+            if len(cluster_pts) < 3:
+                # Not enough points for a hull: emphasize with a ring marker
+                ax.scatter(cluster_pts[:, 0], cluster_pts[:, 1], s=80,
+                            facecolors='none', edgecolors=color_rgb, linewidths=1.0)
+                continue
+
+
+    # Load pixel art icons
+    pixel_art_dir = os.path.join(script_dir, 'pixel_art')
+    pixel_icons = {}
+    if os.path.isdir(pixel_art_dir):
+        for fname in os.listdir(pixel_art_dir):
+            if not fname.lower().endswith('.png'):
+                continue
+            key = os.path.splitext(fname)[0].lower()
+            try:
+                img = mpimg.imread(os.path.join(pixel_art_dir, fname))
+                # Ensure image is in RGBA or RGB float format
+                pixel_icons[key] = img
+            except Exception as _:
+                pass
+
+    # Overlay pixel art at final (post-cluster) locations; fallback to dot if missing
+    ICON_SIZE_PX = 10  # target visual size for the longest image side
+
+    def add_icon(ax, xy, img, size_px=ICON_SIZE_PX, z=5):
+        h, w = img.shape[:2]
+        scale = size_px / float(max(h, w))
+        oi = OffsetImage(img, zoom=scale)
+        ab = AnnotationBbox(oi, xy, frameon=False, pad=0.0, box_alignment=(0.5, 0.5),
+                            annotation_clip=True, zorder=z)
+        ax.add_artist(ab)
+
+    # Draw cluster outlines first (already drawn above), then icons on top
+    for cls, pts in post_by_class.items():
+        icon = pixel_icons.get(cls.lower())
+        if icon is None:
+            # Fallback to solid dots for classes without an icon
+            color_rgb = bgr_to_rgb01(yolo.class_colour.get(cls, (64, 64, 64)))
             xs = [p[0] for p in pts]
             ys = [p[1] for p in pts]
-            # Pre-cluster points: small size, transparent
-            ax.scatter(xs, ys, c=[color_rgb], alpha=0.35, s=25, edgecolors='none')
+            ax.scatter(xs, ys, c=[color_rgb], alpha=1.0, s=50, edgecolors='black', linewidths=0.5, zorder=4)
+            continue
 
-        # Prepare post-clustering points grouped by class
-        post_by_class = {}
-        for key, pose in target_est.items():
-            cls = key.split('_')[0]
-            post_by_class.setdefault(cls, []).append((pose['x'], pose['y']))
+        for (x, y) in pts:
+            add_icon(ax, (x, y), icon)
 
-        # Draw cluster outlines (convex hull per DBSCAN cluster of pre-cluster points)
-        eps, min_samples = 0.15, 2  # keep in sync with merge_estimations defaults
-        for cls, pts in pre_by_class.items():
-            if len(pts) < 1:
-                continue
-            pts_np = np.array(pts, dtype=np.float32)
-            labels = DBSCAN(eps=eps, min_samples=min_samples).fit(pts_np).labels_
-            color_rgb = bgr_to_rgb01(yolo.class_colour.get(cls, (128, 128, 128)))
-
-            for cid in np.unique(labels):
-                if cid == -1:
-                    continue  # skip noise
-                cluster_pts = pts_np[labels == cid]
-                if len(cluster_pts) < 3:
-                    # Not enough points for a hull: emphasize with a ring marker
-                    ax.scatter(cluster_pts[:, 0], cluster_pts[:, 1], s=80,
-                               facecolors='none', edgecolors=color_rgb, linewidths=1.0)
-                    continue
-                hull = cv2.convexHull(cluster_pts.reshape(-1, 1, 2))
-                hull = hull.squeeze()
-                hx = np.r_[hull[:, 0], hull[0, 0]]
-                hy = np.r_[hull[:, 1], hull[0, 1]]
-                ax.plot(hx, hy, color=color_rgb, linewidth=1.2)
-                ax.fill(hull[:, 0], hull[:, 1], color=color_rgb, alpha=0.10)
-
-        # Load pixel art icons
-        pixel_art_dir = os.path.join(script_dir, 'pixel_art')
-        pixel_icons = {}
-        if os.path.isdir(pixel_art_dir):
-            for fname in os.listdir(pixel_art_dir):
-                if not fname.lower().endswith('.png'):
-                    continue
-                key = os.path.splitext(fname)[0].lower()
-                try:
-                    img = mpimg.imread(os.path.join(pixel_art_dir, fname))
-                    # Ensure image is in RGBA or RGB float format
-                    pixel_icons[key] = img
-                except Exception as _:
-                    pass
-
-        # Overlay pixel art at final (post-cluster) locations; fallback to dot if missing
-        ICON_SIZE_PX = 10  # target visual size for the longest image side
-
-        def add_icon(ax, xy, img, size_px=ICON_SIZE_PX, z=5):
-            h, w = img.shape[:2]
-            scale = size_px / float(max(h, w))
-            oi = OffsetImage(img, zoom=scale)
-            ab = AnnotationBbox(oi, xy, frameon=False, pad=0.0, box_alignment=(0.5, 0.5),
-                                annotation_clip=True, zorder=z)
-            ax.add_artist(ab)
-
-        # Draw cluster outlines first (already drawn above), then icons on top
-        for cls, pts in post_by_class.items():
-            icon = pixel_icons.get(cls.lower())
-            if icon is None:
-                # Fallback to solid dots for classes without an icon
-                color_rgb = bgr_to_rgb01(yolo.class_colour.get(cls, (64, 64, 64)))
-                xs = [p[0] for p in pts]
-                ys = [p[1] for p in pts]
-                ax.scatter(xs, ys, c=[color_rgb], alpha=1.0, s=50, edgecolors='black', linewidths=0.5, zorder=4)
-                continue
-
-            for (x, y) in pts:
-                add_icon(ax, (x, y), icon)
-
-        plt.show()
-    except Exception as e:
-        print(f'Plotting failed: {e}')
+    plt.show()
+#except Exception as e:
+#    print(f'Plotting failed: {e}')
