@@ -55,7 +55,7 @@ class TurnThenGoController(BaseController):
             return 0, turn_dir, 0, turn_tick, False
 
         # Drive forward if aligned
-        allowed_speeds = range(self.min_forward_tick, self.max_forward_tick + 1, 15)
+        allowed_speeds = range(self.min_forward_tick, self.max_forward_tick + 1, 5)
         fwd_mag = min(1.0, dist / 0.5)
         fwd_tick = int(min(self.max_forward_tick, max(self.min_forward_tick, fwd_mag * self.max_forward_tick)))
 
