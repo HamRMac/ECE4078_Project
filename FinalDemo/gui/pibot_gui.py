@@ -74,6 +74,7 @@ class PiBotGUI:
         sector_provider=None,
         # Targets overlay provider (shopping list + known positions)
         targets_provider=None,
+        threshold_m: float = None,
     ) -> None:
         """
         Parameters
@@ -100,6 +101,7 @@ class PiBotGUI:
         self.detector = detector
         self.fruit_ranger = fruit_ranger
         self.target_dims = target_dims or {}
+
         # Display-only providers / intents
         self.interactive = bool(interactive)
         self.intent_sink = intent_sink
@@ -109,6 +111,7 @@ class PiBotGUI:
         self.mode_sink = mode_sink
         self.sector_provider = sector_provider
         self.targets_provider = targets_provider
+        self.threshold_m = threshold_m
 
         # Interactive state
         self.goal_xy: Optional[Tuple[float, float]] = None
@@ -247,6 +250,17 @@ class PiBotGUI:
                     icon_crop = icon_rot[iy0:iy1, ix0:ix1]
                     alpha = icon_crop[:, :, 3:] / 255.0
                     roi[:] = (1 - alpha) * roi + alpha * icon_crop[:, :, :3]
+        except Exception:
+            pass
+
+        # --- DRAW THRESHOLD CIRCLE AROUND ROBOT (world radius = threshold_m) ---
+        try:
+            if self.threshold_m is not None:
+                radius_m = float(self.threshold_m)  # expect provided in calling scope
+                # Map a point radius_m to the +x side into grid coords, measure pixel radius
+                r2, c2 = self.grid.world_to_grid(rx + radius_m, ry)
+                radius_px = max(1, int(round(np.hypot((c2 - c_r), (r2 - r_r)) * self.scale)))
+                cv2.circle(vis_bgr, (px, py), radius_px, (0, 200, 255), 1, lineType=cv2.LINE_AA)
         except Exception:
             pass
 
@@ -423,15 +437,16 @@ class PiBotGUI:
                 if disp_name is None:
                     disp_name = str(id)
                 try:
-                    rr, cc = self.grid.world_to_grid(float(x), float(y))
-                    cx, cy = int(cc * self.scale), int(rr * self.scale)
                     # Change colour based on state
                     if id in collected:
-                        color = (220, 0, 0)  # blue in BGR
+                        color = (220, 0, 0)
                     elif id == active:
-                        color = (0, 120, 0)  # blue in BGR
+                        color = (0, 120, 0)
                     else:
                         color = (0, 0, 220)
+                    # Get the position
+                    rr, cc = self.grid.world_to_grid(float(x), float(y))
+                    cx, cy = int(cc * self.scale), int(rr * self.scale)
                     cv2.circle(vis_bgr, (cx, cy), 10, color, thickness=2, lineType=cv2.LINE_AA)
                     cv2.putText(vis_bgr, str(disp_name)[:10], (cx + 12, cy - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 0, 0), 2, cv2.LINE_AA)
                     cv2.putText(vis_bgr, str(disp_name)[:10], (cx + 12, cy - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1, cv2.LINE_AA)

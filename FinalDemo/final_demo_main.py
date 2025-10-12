@@ -778,6 +778,7 @@ def main():
         sector_provider=_sector_provider,
         mode_sink=_mode_sink,
         targets_provider=world.get_targets_info,
+        threshold_m=args.reached_thresh_m,
     )
 
     log.info("Launching PiBotGUI (display-only)")
