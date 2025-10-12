@@ -835,19 +835,21 @@ class RunnerFinal(threading.Thread):
                 # Set status
                 log.info("🎯 Heading to known target id=%d: %s at (%.2f, %.2f) [%s]",
                         target_index, name, txy[0], txy[1], progress_str)
-
+                
+            # This is the scan for the first approach
             attempt = 0
+            log.info("Starting scan before approaching %s (attempt %d)", name, attempt + 1)
+            self.world.set_status(mode='AUTO', sm_state='FinalDemo', action='scan', target=name,
+                                    progress=progress_str)
+            self._scan_and_update()
+
+            # This is the main approach loop
             while not self._stop.is_set():
                 if attempt >= self.max_approach_attempts:
                     log.warning("Max attempts reached for target %s", name)
                     print(f"🎯 <-- Reached {name}")
                     break
-                # 1) Scan
-                log.info("Starting scan before approaching %s (attempt %d)", name, attempt + 1)
-                self.world.set_status(mode='AUTO', sm_state='FinalDemo', action='scan', target=name,
-                                       progress=progress_str)
-                self._scan_and_update()
-
+               
                 # Refresh target coords in case the scan updated them
                 current_target = self.all_targets_world_dict[current_target_index]
                 new_txy = (current_target.get("x"), current_target.get("y"))
@@ -861,8 +863,8 @@ class RunnerFinal(threading.Thread):
                 pose = self._get_return_pose()
                 dist = self._dist((pose[0], pose[1]), txy)
                 if dist <= self.reached_thresh_m:
-                    self._scan_and_update()
                     print(f"Potentially reached {name}, verifying...")
+                    self._scan_and_update()
                     pose = self._get_return_pose()
                     dist = self._dist((pose[0], pose[1]), txy)
                     if dist <= self.reached_thresh_m:
@@ -908,8 +910,8 @@ class RunnerFinal(threading.Thread):
                         pass
                     dist = self._dist((pose[0], pose[1]), txy)
                     if dist <= self.reached_thresh_m:
-                        self._scan_and_update()
                         print(f"Potentially reached {name}, verifying...")
+                        self._scan_and_update()
                         pose = self._get_return_pose()
                         dist = self._dist((pose[0], pose[1]), txy)
                         if dist <= self.reached_thresh_m:
