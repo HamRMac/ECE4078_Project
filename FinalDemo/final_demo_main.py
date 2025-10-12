@@ -158,11 +158,7 @@ def get_robot_pose(penguin_pi: PenguinPi, aruco_detector: aruco_detector, ekf: E
     ekf.update(lms)
 
     # --- Track time since last seen ArUco ---
-    if not hasattr(get_robot_pose, "_last_aruco_t"):
-        get_robot_pose._last_aruco_t = now
-    if lms:  # at least one marker detected
-        get_robot_pose._last_aruco_t = now
-    time_since_last_aruco = now - get_robot_pose._last_aruco_t
+    time_of_last_aruco = time.monotonic()
 
     # Read pose from EKF robot state
     try:
@@ -178,7 +174,7 @@ def get_robot_pose(penguin_pi: PenguinPi, aruco_detector: aruco_detector, ekf: E
 
     ####################################################
 
-    return robot_pose, time_since_last_aruco
+    return robot_pose, time_of_last_aruco
 
 
 # wheel and camera calibration for SLAM

@@ -686,18 +686,23 @@ class RunnerFinal(threading.Thread):
                 
                 # 4) Drive this plan
                 done_this_target = False
+                time_of_start_of_approach = time.monotonic()
                 while not self._stop.is_set() and self._plan_waypoints:
                     t0 = time.time()
                     # Get the pose and time since we last saw an ArUco
-                    pose, aruco_time_delta = self._get_return_pose()
-
-                    # If aruco_time_delta is large, we are probably lost - do a scan and replan
-                    if aruco_time_delta is None or aruco_time_delta > 10.0:
+                    pose, time_of_last_aruco = self._get_return_pose()
+                    # Compute time since last ArUco sighting or start of approach (whichever is larger)
+                    # if the latter is larger, we haven't seen an ArUco since starting the approach
+                    time_since_last_aruco = time.time() - np.max(time_of_start_of_approach,time_of_last_aruco)
+                    # If time_since_last_aruco is large, we are probably lost - do a scan and replan
+                    if time_since_last_aruco > 10.0:
                         log.info("No recent ArUco sighting (last seen %.1f s ago); scanning and replanning",
-                                 float(aruco_time_delta) if aruco_time_delta is not None else -1.0)
+                                 float(time_since_last_aruco))
                         self.world.set_status(mode='AUTO', sm_state='FinalDemo', action='scan', target=name,
                                                progress=progress_str)
                         self._scan_and_update()
+                        # Set the time_of_start_of_approach to now so we don't immediately re-scan
+                        time_of_start_of_approach = time.monotonic()
                         self.world.set_status(mode='AUTO', sm_state='FinalDemo', action='replanning', target=name,
                                                progress=progress_str)
 
