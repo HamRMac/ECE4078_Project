@@ -317,8 +317,8 @@ class EKF:
         if not measurements:
             return
 
-        cam_dist_to_centre = 0.03
-        cam_offset = [[cam_dist_to_centre*np.cos(th)],[cam_dist_to_centre*np.sin(th)]]
+        # cam_dist_to_centre = 0.03
+        # cam_offset = [[cam_dist_to_centre*np.cos(th)],[cam_dist_to_centre*np.sin(th)]]
         th = self.robot.state[2]
         robot_xy = self.robot.state[0:2,:]
         R_theta = np.block([[np.cos(th), -np.sin(th)],[np.sin(th), np.cos(th)]])
@@ -332,7 +332,7 @@ class EKF:
             
             lm_bff = lm.position
 
-            lm_inertial = robot_xy + cam_offset + R_theta @ lm_bff
+            lm_inertial = robot_xy + R_theta @ lm_bff # + cam_offset 
 
             self.taglist.append(int(lm.tag))
             self.markers = np.concatenate((self.markers, lm_inertial), axis=1)
