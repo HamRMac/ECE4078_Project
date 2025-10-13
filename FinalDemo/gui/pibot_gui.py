@@ -33,7 +33,7 @@ import pdb;
 from planning.grid_map import GridMap
 from planning.astar import AStarPlanner, PlanResult
 from navigation.controller import ControllerManager
-from state_machine.state_machine import PiBotFruitSearchSM
+from slam.aruco_detector import aruco_detector
 from util.pibot import PenguinPi
 
 log = logging.getLogger(__name__)
@@ -48,8 +48,8 @@ class PiBotGUI:
         grid: GridMap,
         ppi: PenguinPi,
         planner: AStarPlanner,
-        state_machine: PiBotFruitSearchSM,
         detector=None,
+        aruco_detector: Optional[aruco_detector] = None,
         fruit_ranger=None,
         # Controller type
         controller_kind: str = "ttg",
@@ -87,7 +87,6 @@ class PiBotGUI:
         """
         self.grid = grid
         self.planner = planner
-        self.state_machine = state_machine
         self.get_pose_fn = get_pose_fn
         self.scale = int(max(1, window_scale))
         self.fps = int(max(1, fps))
@@ -99,6 +98,7 @@ class PiBotGUI:
         # Live detection handles
         self.get_frame_fn = get_frame_fn
         self.detector = detector
+        self.aruco_detector = aruco_detector
         self.fruit_ranger = fruit_ranger
         self.target_dims = target_dims or {}
 
@@ -585,45 +585,11 @@ class PiBotGUI:
                     frame_bgr = np.zeros_like(self._vis)
 
                 det_vis = frame_bgr.copy()
-                results = []
                 try:
-                    if self.detector is not None:
-                        det_out, det_vis = self.detector.detect_single_image(frame_bgr)
-                        if isinstance(det_out, list):
-                            for item in det_out:
-                                # Expect (label, [x,y,w,h])
-                                try:
-                                    label, bbox = item[0], item[1]
-                                except Exception:
-                                    continue
-                                # Compute range/theta with FruitRanger if available
-                                rng = -1.0; th = 0.0
-                                if self.fruit_ranger is not None:
-                                    true_h = None
-                                    if isinstance(label, str) and label in self.target_dims:
-                                        dims = self.target_dims[label]
-                                        if isinstance(dims, (list, tuple)) and len(dims) == 3:
-                                            true_h = float(dims[2])
-                                    if true_h is None:
-                                        true_h = 0.08
-                                    # Select your method!
-                                    est = self.fruit_ranger.from_bbox_height(bbox, true_h)
-                                    #est = self.fruit_ranger.from_ground_ray(bbox)
-                                    if est is not None:
-                                        rng = float(est['r'])
-                                        th = float(np.degrees(est['theta']))
-                                # class_id mapping
-                                if isinstance(label, int):
-                                    cid = int(label)
-                                else:
-                                    keys = list(self.target_dims.keys())
-                                    cid = keys.index(label) if label in keys else -1
-                                results.append({"class_id": cid, "range": rng, "theta": th})
-                    # Print JSON line for this frame
-                    try:
-                        log.debug(json.dumps(results) + "\n")
-                    except Exception as e:
-                        log.debug(f"json_error: {e}\n")
+                    if self.aruco_detector is not None:
+                        # Detector returns (landmarks, visualisation)
+                        _, det_vis = self.aruco_detector.detect_marker_positions(frame_bgr)
+                    # else: fall back to the raw frame already in det_vis
                 except Exception as e:
                     log.error(f"detector_error: {e}\n")
 

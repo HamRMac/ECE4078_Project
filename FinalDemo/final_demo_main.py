@@ -36,7 +36,6 @@ from planning.grid_map import GridMap
 from slam.aruco_detector import aruco_detector
 
 # Import state machine
-from state_machine.state_machine import PiBotFruitSearchSM
 from runtime.world_model import WorldModel
 from runtime.robot_commander import RobotCommander
 from runtime.runner_finaldemo import RunnerFinal
@@ -590,14 +589,6 @@ def _make_pose_fn(args, penguinpiInstance, aruco_detector, ekfInstance):
     return _get_pose
 
 
-def _init_state_machine():
-    try:
-        sm = PiBotFruitSearchSM()
-        return sm
-    except Exception:
-        return None
-
-
 def _load_target_fruits_dict(list_path: str):
     targets = {}
     try:
@@ -640,7 +631,6 @@ def main():
     #     print(next_waypoint)
 
     # 8) State machine + targets (if used by GUI)
-    stateMachineInstance = _init_state_machine()
     _ = _load_target_fruits_dict("ECE4078_Project/Milestone3/M3_prac_shopping_list.txt")
 
     # 9) Runtime wiring: WorldModel, Runner (L3/L4), GUI
@@ -737,8 +727,8 @@ def main():
         grid=gridMapInstance,
         ppi=penguinpiInstance,
         planner=AStarPlanner(),
-        state_machine=stateMachineInstance,
         detector=yoloDetectorInstance,
+        aruco_detector=aruco_det,
         fruit_ranger=fruitRangerInstance,
         controller_kind=args.controller,
         get_pose_fn=_get_pose,
