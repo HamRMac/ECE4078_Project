@@ -8,3 +8,7 @@ python3 TargetPoseEst.py - dist 20
 inflation_margin
 reached_thresh_m
 max_approach_attempts
+
+
+> Hamish
+python3 final_demo_main.py --map slam_markers.txt --shopping_list shopping_list.txt --calib_dir calibration/param/ --controller ttg --model YOLO/model/V5.pt --ip 192.168.50.1 --boundary_margin 0.3 --update_targets False  --reached_thresh_m 0.30 --obstacle_size_target 0.03

@@ -67,6 +67,7 @@ class RunnerFinal(threading.Thread):
                  target_positions: Optional[Dict[int, Tuple[float, float]]] = None,
                  update_targets: Optional[bool] = True,
                  obstacle_sizes: Optional[Dict[str, float]] = None,
+                 obstacle_size_target: Optional[float] = None,
                  reached_thresh_m: Optional[float] = 0.25,
                  max_approach_attempts: Optional[int] = 6,
                  disable_scans: Optional[bool] = False,
@@ -102,6 +103,7 @@ class RunnerFinal(threading.Thread):
             "undetected": 0.10,  # larger
             "detected": 0.05,  # smaller
         }
+        self.obstacle_size_target = float(obstacle_size_target) if obstacle_size_target is not None else self.obstacle_sizes.get("detected", 0.05)
         self.reached_thresh_m = reached_thresh_m  # threshold to consider a target "reached"
         self.max_approach_attempts = max_approach_attempts
 
@@ -119,6 +121,7 @@ class RunnerFinal(threading.Thread):
         self._just_replanned: bool = False
 
         self._target_mode: Literal['KNOWN_TARGETS','CHECK_ALL'] = 'KNOWN_TARGETS'
+        self.current_target_index = -1
 
         self.disable_scans = bool(disable_scans)
         if self.disable_scans:
@@ -288,7 +291,7 @@ class RunnerFinal(threading.Thread):
         Returns True if a plan is installed.
         """
         # Try expanding radii close to the target
-        for r in [0.15, 0.20, 0.25, 0.30, 0.35, 0.40, 0.50]:
+        for r in [0.15, 0.17, 0.20, 0.25, 0.30, 0.35, 0.40, 0.50]:
             if self._plan_approach_to_target(target_xy, radius_m=r):
                 return True
         # Try nearest free around target
@@ -559,7 +562,6 @@ class RunnerFinal(threading.Thread):
                 str(k): (float(info["pos"][0]), float(info["pos"][1]))
                 for k, info in self.target_positions.items()
             }
-            remaining = positions.copy()
 
             # Set the targets info in the world model
             self.world.set_targets_info(
@@ -578,7 +580,7 @@ class RunnerFinal(threading.Thread):
 
         # For each target in target_order
         for target_index in target_order:
-            current_target_index = -1
+            self.current_target_index = -1
             # If we are in CHECK_ALL
             if self._target_mode == 'CHECK_ALL':
                 # 1) Choose closest unclassified target
@@ -601,7 +603,7 @@ class RunnerFinal(threading.Thread):
                 idx, info = min(unclassified, key=lambda kv: (sqdist(kv[1]["pos"]), kv[0]))
                 txy = (float(info["pos"][0]), float(info["pos"][1]))
                 name = str(idx)
-                current_target_index = idx
+                self.current_target_index = idx
 
                 # Create progress string
                 progress_str = f"{len(collected_targets) + 1}/{total_targets}"
@@ -631,7 +633,7 @@ class RunnerFinal(threading.Thread):
                 current_target = self.all_targets_world_dict[target_index]
                 txy = (current_target.get("x"), current_target.get("y"))
                 name = current_target.get("disp_name") if current_target.get("disp_name") is not None else str(target_index)
-                current_target_index = target_index
+                self.current_target_index = target_index
 
                 progress_str = f"{len(collected_targets) + 1}/{total_targets}"
 
@@ -651,7 +653,9 @@ class RunnerFinal(threading.Thread):
                 # Set status
                 log.info("🎯 Heading to known target id=%d: %s at (%.2f, %.2f) [%s]",
                         target_index, name, txy[0], txy[1], progress_str)
-                
+
+            # Update the dynamic layer with target sizing
+            self.update_dynamic_layer_with_targets()
             # This is the scan for the first approach
             attempt = 0
             log.info("Approaching %s (attempt %d)", name, attempt + 1)
@@ -668,12 +672,12 @@ class RunnerFinal(threading.Thread):
                     break
                
                 # Refresh target coords in case the scan updated them
-                current_target = self.all_targets_world_dict[current_target_index]
+                current_target = self.all_targets_world_dict[self.current_target_index]
                 new_txy = (current_target.get("x"), current_target.get("y"))
                 print(current_target)
                 if self._dist(txy, new_txy) > 0.03:  # 3 cm hysteresis to avoid thrashing
                     log.info("Target %s moved from (%.2f, %.2f) to (%.2f, %.2f); replanning",
-                            str(current_target_index), txy[0], txy[1], new_txy[0], new_txy[1])
+                            str(self.current_target_index), txy[0], txy[1], new_txy[0], new_txy[1])
                     txy = new_txy
                     self._goal = txy
                 '''
@@ -690,7 +694,7 @@ class RunnerFinal(threading.Thread):
                         # Update targets info: mark as collected
                         try:
                             wm = self.world.get_targets_info()
-                            collected_targets.append(current_target_index)
+                            collected_targets.append(self.current_target_index)
                             self.world.set_targets_info(
                                 targets=self.all_targets_world_dict,
                                 active=-1,
@@ -713,6 +717,28 @@ class RunnerFinal(threading.Thread):
                     time.sleep(0.5)
                     attempt += 1
                     continue
+
+                # 3) Check if bot is close enough to goal
+                wp = self._plan_waypoints[-1] # Get the last waypoint (goal)
+                pose, _ = self._get_return_pose()
+                dist = self._dist((pose[0], pose[1]), wp)
+                if dist <= self.ctrl.ctrl.pos_tol: # within controller tolerance of goal
+                    log.info("Already within goal wp tol so close enough to target  %s (%.2f m); marking reached", name, dist)
+                    print(f"🎯 <-- Reached {name}")
+                    time.sleep(2.0)
+                    # Update targets info: mark as collected
+                    try:
+                        collected_targets.append(self.current_target_index)
+                        self.world.set_targets_info(
+                            targets=self.all_targets_world_dict,
+                            active=-1,
+                            collected=collected_targets
+                        )
+                        self.world.set_status(mode='AUTO', sm_state='FinalDemo', action='reached', target=name,
+                                            progress=progress_str)
+                    except Exception:
+                        pass
+                    break  # next target
                 
                 # 4) Drive this plan
                 done_this_target = False
@@ -750,8 +776,8 @@ class RunnerFinal(threading.Thread):
                     # Check if we are within threshold of the target
                     dist = self._dist((pose[0], pose[1]), txy)
                     if dist <= self.reached_thresh_m:
-                        print(f"Potentially reached {name}, verifying...")
                         if not self.disable_scans:
+                            print(f"Potentially reached {name}, verifying...")
                             self._scan_for_loc()
                         pose, _ = self._get_return_pose()
                         dist = self._dist((pose[0], pose[1]), txy)
@@ -762,8 +788,7 @@ class RunnerFinal(threading.Thread):
                             self._plan_waypoints = []
                             # mirror collection update here to avoid re-scanning and double-reporting
                             try:
-                                wm = self.world.get_targets_info()
-                                collected_targets.append(current_target_index)
+                                collected_targets.append(self.current_target_index)
                                 self.world.set_targets_info(
                                     targets=self.all_targets_world_dict,
                                     active=-1,
@@ -776,6 +801,9 @@ class RunnerFinal(threading.Thread):
 
                             done_this_target = True
                             break
+                        else:
+                            # The localisation scan pushed away so increase attempts counter
+                            attempt += 1
                     
                     dt = time.time() - t0
                     if dt < self._period:
@@ -811,7 +839,12 @@ class RunnerFinal(threading.Thread):
                 continue  # skip malformed entries
             positions.append((x, y))
             is_fresh = bool(obj.get("updated_by_scan", False))
-            radii.append(self.obstacle_sizes["detected"] if is_fresh else self.obstacle_sizes["undetected"])
+            if self.current_target_index is not None and obj is targets.get(self.current_target_index):
+                # If the active target is set change it's radius to the target radius
+                radii.append(self.obstacle_size_target)
+            else:
+                # Otherwise use detected/undetected sizes
+                radii.append(self.obstacle_sizes["detected"] if is_fresh else self.obstacle_sizes["undetected"])
 
         # Push to the grid (safe to call with empty lists)
         self.grid.set_dynamic_fruits_sizes(positions=positions, fruit_radii_m=radii)
