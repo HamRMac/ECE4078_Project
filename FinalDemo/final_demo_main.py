@@ -413,6 +413,16 @@ def str2bool(v):
         return False
     else:
         raise argparse.ArgumentTypeError('Boolean value expected.')
+    
+def parse_target_list(s):
+    """Parse a comma-separated list of integers into a sorted list."""
+    if not s:
+        return None
+    try:
+        values = [int(x.strip()) for x in s.split(',') if x.strip()]
+        return sorted(values)
+    except ValueError:
+        raise argparse.ArgumentTypeError("visit_targets must be a comma-separated list of integers")
 
 def _parse_args():
     parser = argparse.ArgumentParser("Fruit searching")
@@ -434,6 +444,7 @@ def _parse_args():
     parser.add_argument("--reached_thresh_m", type=float, default=0.25, help='Threshold to consider a target "reached" (m)')
     parser.add_argument("--max_approach_attempts", type=int, default=6, help='Maximum attempts to approach a target')
     parser.add_argument("--boundary_margin", type=float, default=0.01, help='Boundary margin for the arena edge (m)')
+    parser.add_argument("--visit_targets",type=parse_target_list,default=None,help="DEBUG USE ONLY: Comma-separated list of target IDs to visit, e.g. '1,2,4,5'")
     # Pose smoothing (control/GUI)
     parser.add_argument("--pose_smoothing", action='store_true', help='Enable EMA + rate-limited smoothed pose for control/GUI')
     parser.add_argument("--pose_alpha_pos", type=float, default=0.2, help='EMA alpha for x/y')
@@ -681,6 +692,9 @@ def main():
         target_positions=known_targets,   # renamed from known_targets
         reached_thresh_m=float(args.reached_thresh_m),
         max_approach_attempts=args.max_approach_attempts,
+
+        # Debug / overrides
+        visit_targets=args.visit_targets,  # None or list of target IDs
 
         update_targets=bool(args.update_targets),
 

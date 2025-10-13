@@ -70,6 +70,7 @@ class RunnerFinal(threading.Thread):
                  reached_thresh_m: Optional[float] = 0.25,
                  max_approach_attempts: Optional[int] = 6,
                  disable_scans: Optional[bool] = False,
+                 visit_targets: Optional[List[int]] = None,
                  ):
         super().__init__(daemon=True, name="RunnerFinal")
 
@@ -107,13 +108,14 @@ class RunnerFinal(threading.Thread):
         # Generated data
         self.all_obstacles_world_dict = {}
         self.all_targets_world_dict = {}
+        self.visit_targets = visit_targets  # None or list of target IDs to visit (debug use only)
 
         # Planning state
         self._goal: Optional[Tuple[float, float]] = None
         self._plan_waypoints: List[Tuple[float, float]] = []
         self._wp_idx: int = 0
         self._period = 1.0 / max(1.0, float(hz))
-        self._xtrack_thresh: float = 0.05
+        self._xtrack_thresh: float = 0.04
         self._just_replanned: bool = False
 
         self._target_mode: Literal['KNOWN_TARGETS','CHECK_ALL'] = 'KNOWN_TARGETS'
@@ -367,6 +369,15 @@ class RunnerFinal(threading.Thread):
             return True
         except Exception:
             return False
+        
+    def _scan_for_loc(self):
+        if self.actions is not None and self._drive_enabled:
+            try:
+                self.actions.localise_scan(
+                                get_pose_fn=self.get_pose_fn,
+                                turning_tick=40)
+            except Exception as e:
+                log.warning("Scan failed: %s", e)
 
     def _scan_and_update(self):
         if self.disable_scans:
@@ -494,9 +505,19 @@ class RunnerFinal(threading.Thread):
             target_order = all_targets.copy()
             target_order.sort()
             self._target_mode = 'CHECK_ALL'
+            if self.visit_targets is not None:
+                log.warning("Debug: Overriding target order with visit_targets=%s", self.visit_targets)
+                target_order = [tid for tid in self.visit_targets if tid in self.target_positions]
+                total_targets = len(target_order)
+        # We did add shopping list targets so visit_targets relates to idx in target_order
+        elif self.visit_targets is not None:
+            log.warning("Debug: Overriding sl with visit_targets=%s", self.visit_targets)
+            target_order = [tid for idx,tid in enumerate(target_order) if (idx+1) in self.visit_targets]
+            total_targets = len(target_order)
 
         print(target_order)
         total_targets = len(target_order)
+
 
         # Collate all the obstacles into two dictionaries
         # self.all_targets_world_dict contains all the targets
@@ -633,10 +654,11 @@ class RunnerFinal(threading.Thread):
                 
             # This is the scan for the first approach
             attempt = 0
-            log.info("Starting scan before approaching %s (attempt %d)", name, attempt + 1)
+            log.info("Approaching %s (attempt %d)", name, attempt + 1)
             self.world.set_status(mode='AUTO', sm_state='FinalDemo', action='scan', target=name,
                                     progress=progress_str)
-            self._scan_and_update()
+            #self._scan_for_loc()
+            #self._scan_and_update()
 
             # This is the main approach loop
             while not self._stop.is_set():
@@ -687,7 +709,7 @@ class RunnerFinal(threading.Thread):
                     log.warning("No path found towards %s. Scanning...", name)
                     self.world.set_status(mode='AUTO', sm_state='FinalDemo', action='replan', target=name,
                                            progress=progress_str)
-                    self._scan_and_update()
+                    self._scan_for_loc()
                     time.sleep(0.5)
                     attempt += 1
                     continue
@@ -729,7 +751,8 @@ class RunnerFinal(threading.Thread):
                     dist = self._dist((pose[0], pose[1]), txy)
                     if dist <= self.reached_thresh_m:
                         print(f"Potentially reached {name}, verifying...")
-                        self._scan_and_update()
+                        if not self.disable_scans:
+                            self._scan_for_loc()
                         pose, _ = self._get_return_pose()
                         dist = self._dist((pose[0], pose[1]), txy)
                         if dist <= self.reached_thresh_m:

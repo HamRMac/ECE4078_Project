@@ -43,6 +43,8 @@ class PenguinPi:
         self._encoder_rate_hz = 0.0
 
         self._encoder_session = requests.Session()
+        self._encoder_errors = 0
+        self._encoder_threshold = 5
 
         self._vel_polling_mode = 'measured'  # 'measured' or 'commanded'
 
@@ -226,9 +228,11 @@ class PenguinPi:
                     log.warning("Encoder poll failed: %s", exc)
                     error_logged = True
                     # Stop using measured velocity if there is an error
-                    self._vel_polling_mode = 'commanded'
-                    log.info("Switching to commanded velocity mode for remainder of session.")
-                    self.stop_encoder_monitor()
+                    self._encoder_errors += 1
+                    if self._encoder_errors >= self._encoder_threshold:
+                        self._vel_polling_mode = 'commanded'
+                        log.info("Switching to commanded velocity mode for remainder of session.")
+                        self.stop_encoder_monitor(join=False)
 
                 prev_counts = None
                 prev_stamp = None
